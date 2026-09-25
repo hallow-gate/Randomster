@@ -13,6 +13,7 @@ const REPORT_REASONS = [
 
 export function ControlDock({
   onSkip,
+  onNext,
   onReport,
   onBlock,
   micMuted,
@@ -23,6 +24,7 @@ export function ControlDock({
   onToggleSound,
 }: {
   onSkip: () => void;
+  onNext: () => void;
   onReport: (reason: string, details?: string) => void;
   onBlock: () => void;
   micMuted?: boolean;
@@ -58,6 +60,9 @@ export function ControlDock({
       )}
       <BrutalButton variant="lime" onClick={onSkip}>
         Skip
+      </BrutalButton>
+      <BrutalButton variant="cyan" onClick={onNext}>
+        Next
       </BrutalButton>
       <BrutalButton variant="magenta" onClick={() => setReportOpen((v) => !v)}>
         Report
