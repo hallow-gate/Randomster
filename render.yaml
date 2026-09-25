@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: randomster-api
+    runtime: node
+    plan: starter
+    rootDir: apps/api
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8080
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_CALLS_APP_ID
+        sync: false
+      - key: CLOUDFLARE_CALLS_APP_SECRET
+        sync: false
+      - key: CLOUDFLARE_TURN_KEY_ID
+        sync: false
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false
+      - key: MODERATION_WEBHOOK_SECRET
+        sync: false
+      - key: NCMEC_REPORTING_ENABLED
+        value: "false"
+      - key: IP_HASH_SALT
+        sync: false
