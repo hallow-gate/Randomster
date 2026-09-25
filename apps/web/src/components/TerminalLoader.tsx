@@ -18,10 +18,11 @@ export function TerminalLoader({ countryCode, onlineCount }: Props) {
     setVisible([]);
     let i = 0;
     const interval = setInterval(() => {
-      setVisible((prev) => (i < lines.length ? [...prev, lines[i]] : prev));
-      i += 1;
-      if (i >= lines.length) clearInterval(interval);
-    }, 450);
+  const nextLine = lines[i];
+  setVisible((prev) => (nextLine !== undefined ? [...prev, nextLine] : prev));
+  i += 1;
+  if (i >= lines.length) clearInterval(interval);
+}, 450);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [countryCode, onlineCount]);
