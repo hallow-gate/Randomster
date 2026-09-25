@@ -3,9 +3,8 @@ services:
     name: randomster-api
     runtime: node
     plan: free
-    rootDir: apps/api
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    buildCommand: npm install && npm run build -w apps/api
+    startCommand: npm run start -w apps/api
     healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV
