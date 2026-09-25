@@ -90,6 +90,26 @@ export function useMatchmaking(selfId: string | undefined) {
     setState("idle");
   }, [authedFetch, matchId, teardown]);
 
+  // Same as skip(), but goes straight back into the queue instead of
+  // dropping to the idle screen -- lets someone move on to the next
+  // stranger with one click instead of skip, then Start, then wait.
+  const next = useCallback(
+    async (scope: MatchScope) => {
+      if (!matchId) return;
+      await authedFetch("/api/match/skip", { matchId });
+      teardown();
+      setMatchId(null);
+      setPartnerId(null);
+      setState("queued");
+      const result = await authedFetch("/api/match/join", { scope });
+      if (result.status === "matched") {
+        enterMatch(result.matchId, result.partnerId);
+      }
+      // else remains 'queued' — the effect above picks up the eventual match.
+    },
+    [authedFetch, matchId, teardown, enterMatch]
+  );
+
   const report = useCallback(
     async (reason: string, details?: string) => {
       if (!partnerId) return;
@@ -109,5 +129,5 @@ export function useMatchmaking(selfId: string | undefined) {
 
   const resetAfterEnd = useCallback(() => setState("idle"), []);
 
-  return { state, matchId, partnerId, lastEndReason, join, skip, report, block, resetAfterEnd };
+  return { state, matchId, partnerId, lastEndReason, join, skip, next, report, block, resetAfterEnd };
 }
