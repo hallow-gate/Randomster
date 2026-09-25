@@ -35,7 +35,7 @@ services:
         sync: false
 
   - type: web
-    name: randomster-web
+    name: randomster
     runtime: static
     buildCommand: npm install && npm run build -w apps/web
     staticPublishPath: apps/web/dist
