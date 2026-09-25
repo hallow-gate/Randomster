@@ -2,7 +2,7 @@ services:
   - type: web
     name: randomster-api
     runtime: node
-    plan: starter
+    plan: free
     rootDir: apps/api
     buildCommand: npm install && npm run build
     startCommand: npm run start
