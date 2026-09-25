@@ -14,7 +14,7 @@ import { ControlDock } from "../components/ControlDock";
 export default function MatchScreen() {
   const { session, profile } = useAuthContext();
   const selfId = session?.user.id;
-  const { state, matchId, lastEndReason, join, skip, report, block, resetAfterEnd } = useMatchmaking(selfId);
+  const { state, matchId, lastEndReason, join, skip, next, report, block, resetAfterEnd } = useMatchmaking(selfId);
   const [scanlinesOn, setScanlinesOn] = useState(true);
   const sound = useSoundEffects();
 
@@ -44,6 +44,11 @@ export default function MatchScreen() {
   const handleSkip = () => {
     sound.play("click");
     skip();
+  };
+
+  const handleNext = () => {
+    sound.play("click");
+    next(profile.match_scope);
   };
 
   const handleStart = () => {
@@ -95,7 +100,7 @@ export default function MatchScreen() {
                 autoPlay
                 playsInline
                 muted
-                className="absolute bottom-3 right-3 w-28 h-20 object-cover border-2 border-lime shadow-brutal-sm"
+                className="absolute bottom-3 right-3 w-28 h-20 object-cover border-2 border-lime shadow-brutal-sm -scale-x-100"
               />
             )}
           </div>
@@ -138,6 +143,7 @@ export default function MatchScreen() {
           {state === "matched" && matchId && (
             <ControlDock
               onSkip={handleSkip}
+              onNext={handleNext}
               onReport={(reason, details) => report(reason, details)}
               onBlock={block}
               micMuted={micMuted}
