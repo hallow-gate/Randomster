@@ -27,13 +27,16 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
   const localSessionIdRef = useRef<string | null>(null);
   const localTrackNameRef = useRef<string | null>(null);
 
-  const authedFetch = useCallback(async (path: string, body: unknown, method = "POST") => {
+  const authedFetch = useCallback(async (path: string, body?: unknown, method = "POST") => {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
     const res = await fetch(`${apiBaseUrl}${path}`, {
       method,
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        Authorization: `Bearer ${token}`,
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     if (!res.ok) throw new Error(`calls_request_failed:${res.status}`);
     return res.json();
@@ -67,7 +70,15 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
     async function connect() {
       setCallState("connecting");
       try {
-        const pc = new RTCPeerConnection();
+        // Without ICE servers, RTCPeerConnection only gathers host
+        // candidates, so this only worked when both peers happened to be
+        // reachable directly (e.g. same LAN) -- which for two random
+        // strangers on different networks is nearly never. Fetch short-TTL
+        // Cloudflare TURN credentials first so real cross-network calls can
+        // actually establish.
+        const { iceServers } = await authedFetch("/api/turn-credentials", undefined, "GET");
+
+        const pc = new RTCPeerConnection({ iceServers });
         pcRef.current = pc;
 
         pc.ontrack = (event) => {
