@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { env } from "../lib/env.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
@@ -26,6 +26,15 @@ callsRouter.use(requireAuth, requireNotBanned, matchActionLimiter);
 
 const CALLS_BASE = `https://rtc.live.cloudflare.com/v1/apps/${env.CLOUDFLARE_CALLS_APP_ID}`;
 
+class NotAParticipantError extends Error {}
+class CloudflareCallsError extends Error {
+  status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function cfFetch(path: string, body: unknown) {
   const res = await fetch(`${CALLS_BASE}${path}`, {
     method: "POST",
@@ -37,8 +46,12 @@ async function cfFetch(path: string, body: unknown) {
   });
   const data = await res.json().catch(() => null);
   if (!res.ok) {
+    // Surface the actual Cloudflare response, not just the status -- a 401
+    // here almost always means CLOUDFLARE_CALLS_APP_ID/APP_SECRET are wrong
+    // or expired, which previously looked identical to a real "not your
+    // match" 403 from our own side.
     logger.error({ status: res.status, path, data }, "cloudflare_calls_error");
-    throw new Error(`cloudflare_calls_${res.status}`);
+    throw new CloudflareCallsError(`cloudflare_calls_${res.status}`, res.status);
   }
   return data;
 }
@@ -49,8 +62,22 @@ async function assertActiveParticipant(userId: string, matchId: string) {
     .select("id, user_a, user_b, status")
     .eq("id", matchId)
     .single();
-  if (!match || match.status !== "active") throw new Error("match_not_active");
-  if (match.user_a !== userId && match.user_b !== userId) throw new Error("not_a_participant");
+  if (!match || match.status !== "active") throw new NotAParticipantError("match_not_active");
+  if (match.user_a !== userId && match.user_b !== userId) throw new NotAParticipantError("not_a_participant");
+}
+
+/** Maps a caught error to the right HTTP status instead of always 403. */
+function respondToCallsError(res: Response, err: unknown) {
+  if (err instanceof NotAParticipantError) {
+    return res.status(403).json({ error: err.message });
+  }
+  if (err instanceof CloudflareCallsError) {
+    // The caller did everything right; Cloudflare's own API rejected or
+    // failed the request (bad credentials, app misconfigured, outage, etc).
+    return res.status(502).json({ error: "calls_provider_error" });
+  }
+  logger.error({ err: (err as Error).message }, "calls_unexpected_error");
+  return res.status(500).json({ error: "internal_error" });
 }
 
 /** Create a new local Calls session for the caller's own outgoing tracks. */
@@ -64,7 +91,7 @@ callsRouter.post("/session/new", async (req: AuthedRequest, res) => {
     const data = await cfFetch("/sessions/new", {});
     res.json(data);
   } catch (err) {
-    res.status(403).json({ error: (err as Error).message });
+    respondToCallsError(res, err);
   }
 });
 
@@ -85,7 +112,7 @@ callsRouter.post("/tracks/push", async (req: AuthedRequest, res) => {
     const data = await cfFetch(`/sessions/${sessionId}/tracks/new`, { tracks, sessionDescription });
     res.json(data);
   } catch (err) {
-    res.status(403).json({ error: (err as Error).message });
+    respondToCallsError(res, err);
   }
 });
 
@@ -116,7 +143,7 @@ callsRouter.post("/tracks/pull", async (req: AuthedRequest, res) => {
     const data = await cfFetch(`/sessions/${sessionId}/tracks/new`, { tracks });
     res.json(data);
   } catch (err) {
-    res.status(403).json({ error: (err as Error).message });
+    respondToCallsError(res, err);
   }
 });
 
@@ -141,9 +168,13 @@ callsRouter.put("/renegotiate", async (req: AuthedRequest, res) => {
       },
       body: JSON.stringify({ sessionDescription }),
     });
-    if (!response.ok) throw new Error(`cloudflare_calls_${response.status}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      logger.error({ status: response.status, data }, "cloudflare_calls_error");
+      throw new CloudflareCallsError(`cloudflare_calls_${response.status}`, response.status);
+    }
     res.json({ ok: true });
   } catch (err) {
-    res.status(403).json({ error: (err as Error).message });
+    respondToCallsError(res, err);
   }
 });

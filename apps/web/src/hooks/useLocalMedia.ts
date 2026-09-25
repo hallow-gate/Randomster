@@ -17,7 +17,19 @@ export function useLocalMedia(active: boolean) {
 
     let cancelled = false;
     navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
+      .getUserMedia({
+        video: {
+          width: { ideal: 1280, min: 640 },
+          height: { ideal: 720, min: 480 },
+          frameRate: { ideal: 30, max: 30 },
+          facingMode: "user",
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
       .then((s) => {
         if (cancelled) {
           s.getTracks().forEach((t) => t.stop());

@@ -89,7 +89,17 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
           if (pc.connectionState === "failed") setCallState("failed");
         };
 
-        localStream!.getTracks().forEach((track) => pc.addTransceiver(track, { direction: "sendonly" }));
+        localStream!.getTracks().forEach((track) => {
+          const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
+          if (track.kind === "video") {
+            const params = transceiver.sender.getParameters();
+            params.encodings = [{ maxBitrate: 2_500_000, priority: "high" }];
+            transceiver.sender.setParameters(params).catch(() => {
+              // Some browsers reject setParameters before the first
+              // negotiation completes; not fatal, just keeps the default.
+            });
+          }
+        });
 
         const { sessionId } = await authedFetch("/api/calls/session/new", { matchId });
         localSessionIdRef.current = sessionId;
