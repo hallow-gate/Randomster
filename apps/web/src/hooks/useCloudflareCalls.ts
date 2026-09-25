@@ -42,7 +42,27 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
   useEffect(() => {
     if (!matchId || !localStream) return;
     let cancelled = false;
+    let announced = false;
     const signalChannel = supabase.channel(`match:${matchId}`, { config: { broadcast: { self: false } } });
+
+    // Supabase broadcast never replays to a client that subscribes after the
+    // message was sent. If peer A finishes connecting and announces its
+    // session-info before peer B has subscribed, B never learns how to pull
+    // A's track -- the call looks "connected" (A's own PC is up) but the
+    // remote video never arrives. To close that race, whoever announces
+    // records that fact, and re-announces on request; whoever subscribes
+    // asks for a resend right away in case they were the late joiner.
+    async function announceSessionInfo() {
+      const sessionId = localSessionIdRef.current;
+      const trackName = localTrackNameRef.current;
+      if (!sessionId || !trackName) return;
+      announced = true;
+      await signalChannel.send({
+        type: "broadcast",
+        event: "session-info",
+        payload: { sessionId, trackName } satisfies SignalPayload,
+      });
+    }
 
     async function connect() {
       setCallState("connecting");
@@ -81,11 +101,7 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
         if (cancelled) return;
 
         // Tell the other participant how to find our published track.
-        await signalChannel.send({
-          type: "broadcast",
-          event: "session-info",
-          payload: { sessionId, trackName } satisfies SignalPayload,
-        });
+        await announceSessionInfo();
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error("cloudflare_calls_connect_failed", err);
@@ -122,8 +138,19 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
 
     signalChannel
       .on("broadcast", { event: "session-info" }, ({ payload }) => pullPartnerTrack(payload as SignalPayload))
+      .on("broadcast", { event: "request-session-info" }, () => {
+        if (announced) announceSessionInfo();
+      })
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") connect();
+        if (status === "SUBSCRIBED") {
+          connect().then(() => {
+            if (cancelled) return;
+            // In case the peer already announced before we subscribed, ask
+            // them to resend so we don't just sit "connected" with no
+            // remote track.
+            signalChannel.send({ type: "broadcast", event: "request-session-info", payload: {} });
+          });
+        }
       });
 
     return () => {

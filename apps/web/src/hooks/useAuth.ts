@@ -14,6 +14,7 @@ export function useAuth() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   const refreshProfile = async () => {
     if (!session?.user) return;
@@ -21,7 +22,7 @@ export function useAuth() {
       .from("profiles")
       .select("id, username, country_code, match_scope, age_verification_status")
       .eq("id", session.user.id)
-      .single();
+      .maybeSingle();
     setProfile(data as Profile | null);
   };
 
@@ -41,14 +42,19 @@ export function useAuth() {
   useEffect(() => {
     if (!session?.user) {
       setProfile(null);
+      setProfileLoading(false);
       return;
     }
+    setProfileLoading(true);
     supabase
       .from("profiles")
       .select("id, username, country_code, match_scope, age_verification_status")
       .eq("id", session.user.id)
-      .single()
-      .then(({ data }) => setProfile(data as Profile | null));
+      .maybeSingle()
+      .then(({ data }) => {
+        setProfile(data as Profile | null);
+        setProfileLoading(false);
+      });
   }, [session?.user?.id]);
 
   const signInWithGoogle = () =>
@@ -59,5 +65,5 @@ export function useAuth() {
 
   const signOut = () => supabase.auth.signOut();
 
-  return { session, profile, loading, signInWithGoogle, signOut, refreshProfile };
+  return { session, profile, loading, profileLoading, signInWithGoogle, signOut, refreshProfile };
 }

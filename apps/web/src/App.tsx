@@ -10,30 +10,41 @@ import AgeVerification from "./pages/AgeVerification";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 
 function Router() {
-  const { session, profile, loading } = useAuthContext();
+  const { session, profile, loading, profileLoading } = useAuthContext();
 
-  if (loading) {
+  // Wait for the profile fetch to finish too, not just the session check.
+  // `profile` starts out `null` on every fresh load while it's being
+  // fetched, which is indistinguishable from "no profile yet" -- without
+  // this, every guard below would briefly evaluate against a profile that
+  // just hasn't arrived, causing a flash to the wrong page (e.g. bouncing
+  // an already-onboarded user to /username for a frame before correcting).
+  if (loading || (session && profileLoading)) {
     return <div className="min-h-screen flex items-center justify-center text-lime font-mono">loading...</div>;
   }
+
+  const needsUsername = session && !profile?.username;
 
   return (
     <Routes>
       <Route path="/login" element={session ? <Navigate to="/" /> : <Login />} />
-      <Route path="/username" element={session ? <UsernameSetup /> : <Navigate to="/login" />} />
-      <Route path="/settings" element={session ? <Settings /> : <Navigate to="/login" />} />
-      <Route path="/verify-age" element={session ? <AgeVerification /> : <Navigate to="/login" />} />
+      <Route
+        path="/username"
+        element={!session ? <Navigate to="/login" /> : profile?.username ? <Navigate to="/" /> : <UsernameSetup />}
+      />
+      <Route
+        path="/settings"
+        element={!session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <Settings />}
+      />
+      <Route
+        path="/verify-age"
+        element={
+          !session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <AgeVerification />
+        }
+      />
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route
         path="/"
-        element={
-          !session ? (
-            <Navigate to="/login" />
-          ) : !profile?.username ? (
-            <Navigate to="/username" />
-          ) : (
-            <MatchScreen />
-          )
-        }
+        element={!session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <MatchScreen />}
       />
     </Routes>
   );

@@ -19,7 +19,13 @@ export function ChatPanel({ matchId, selfId }: { matchId: string; selfId: string
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages", filter: `match_id=eq.${matchId}` },
-        (payload) => setMessages((prev) => [...prev, payload.new as ChatMessage])
+        (payload) => {
+          const incoming = payload.new as ChatMessage;
+          // Our own messages are already shown optimistically by send(); the
+          // realtime echo of our own INSERT would otherwise duplicate them.
+          if (incoming.sender_id === selfId) return;
+          setMessages((prev) => [...prev, incoming]);
+        }
       )
       .subscribe();
 
@@ -38,11 +44,21 @@ export function ChatPanel({ matchId, selfId }: { matchId: string; selfId: string
     setDraft("");
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
-    await fetch(`${apiBaseUrl}/api/chat/send`, {
+    const res = await fetch(`${apiBaseUrl}/api/chat/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ matchId, content }),
     });
+    if (res.ok) {
+      // Show it immediately rather than waiting on the realtime echo -- the
+      // server is the source of truth for the persisted row/profanity
+      // filtering, but the sender shouldn't have to wait on Realtime just to
+      // see their own message.
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), sender_id: selfId, content, created_at: new Date().toISOString() },
+      ]);
+    }
   };
 
   return (
