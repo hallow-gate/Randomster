@@ -34,3 +34,16 @@ services:
         value: "false"
       - key: IP_HASH_SALT
         sync: false
+
+        - type: web
+    name: randomster-web
+    runtime: static
+    buildCommand: npm install && npm run build -w apps/web
+    staticPublishPath: apps/web/dist
+    envVars:
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: VITE_API_BASE_URL
+        value: https://randomster-api.onrender.com
