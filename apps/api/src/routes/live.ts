@@ -36,7 +36,7 @@ liveRouter.use(requireAuth, requireNotBanned);
 
 interface LiveSessionRow {
   id: string;
-  match_id: string;
+  match_id: string | null;
   broadcaster_id: string;
   broadcaster_username: string;
   partner_id: string | null;
@@ -46,6 +46,7 @@ interface LiveSessionRow {
   started_at: string;
   ended_at: string | null;
   last_heartbeat_at: string;
+  comments_enabled: boolean;
 }
 
 const HEARTBEAT_STALE_SECONDS = 25;
@@ -98,7 +99,12 @@ async function getViewerCount(sessionId: string): Promise<number> {
 }
 
 // =========================================================
-// POST /api/live/start — broadcaster wraps an active match in a live session
+// POST /api/live/start — broadcaster wraps an active match in a live
+// session. If the broadcaster already has one running (they hit "Next" and
+// matched with someone new), this RE-PARTNERS the existing session instead
+// of ending it — the live stream, its comments, reactions and viewers all
+// carry straight through to the new stranger, exactly like tapping "next"
+// on a normal TikTok-style live host view.
 // =========================================================
 const startSchema = z.object({ matchId: z.string().uuid() });
 liveRouter.post("/start", liveActionLimiter, validateBody(startSchema), async (req: AuthedRequest, res) => {
@@ -118,18 +124,26 @@ liveRouter.post("/start", liveActionLimiter, validateBody(startSchema), async (r
     return res.status(403).json({ error: "not_a_participant" });
   }
 
-  // Already broadcasting this match (e.g. a retried request)? Return the
-  // existing session instead of erroring on the unique-active-index.
+  const partnerId = match.user_a === userId ? match.user_b : match.user_a;
+
   const existing = await neonQuery<LiveSessionRow>(
     "select * from live_sessions where broadcaster_id = $1 and status = 'active'",
     [userId]
   );
   if (existing[0]) {
-    return res.json({ id: existing[0].id, matchId: existing[0].match_id });
+    const session = existing[0];
+    if (session.match_id !== matchId) {
+      const partnerUsername = await getUsername(partnerId);
+      await neonQuery(
+        "update live_sessions set match_id = $1, partner_id = $2, partner_username = $3 where id = $4",
+        [matchId, partnerId, partnerUsername, session.id]
+      );
+    }
+    return res.json({ id: session.id, matchId });
   }
 
-  const partnerId = match.user_a === userId ? match.user_b : match.user_a;
-  const [broadcasterUsername, partnerUsername] = await Promise.all([getUsername(userId), getUsername(partnerId)]);
+  const broadcasterUsername = await getUsername(userId);
+  const partnerUsername = await getUsername(partnerId);
 
   const inserted = await neonQuery<{ id: string }>(
     `insert into live_sessions (match_id, broadcaster_id, broadcaster_username, partner_id, partner_username)
@@ -141,6 +155,46 @@ liveRouter.post("/start", liveActionLimiter, validateBody(startSchema), async (r
 
   res.json({ id: inserted[0]?.id, matchId });
 });
+
+// =========================================================
+// POST /api/live/:id/clear-partner — host tapped "Next" (or the partner
+// skipped/blocked/reported them): drop the stale match/partner so viewers
+// immediately see "waiting for next stranger" instead of a frozen or
+// broken video, WITHOUT ending the stream itself. Comments, reactions and
+// viewers all carry straight through.
+// =========================================================
+liveRouter.post("/:id/clear-partner", liveActionLimiter, async (req: AuthedRequest, res) => {
+  const userId = req.userId!;
+  const session = await getActiveSession(req.params.id);
+  if (!session) return res.status(404).json({ error: "session_not_found" });
+  if (session.broadcaster_id !== userId) return res.status(403).json({ error: "not_broadcaster" });
+
+  await neonQuery("update live_sessions set match_id = null, partner_id = null, partner_username = null where id = $1", [
+    session.id,
+  ]);
+  res.json({ status: "ok" });
+});
+
+// =========================================================
+// PATCH /api/live/:id/comments-enabled — host toggles comments on/off,
+// same as other live platforms. Reactions are unaffected.
+// =========================================================
+const commentsEnabledSchema = z.object({ enabled: z.boolean() });
+liveRouter.patch(
+  "/:id/comments-enabled",
+  liveActionLimiter,
+  validateBody(commentsEnabledSchema),
+  async (req: AuthedRequest, res) => {
+    const userId = req.userId!;
+    const session = await getActiveSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "session_not_found" });
+    if (session.broadcaster_id !== userId) return res.status(403).json({ error: "not_broadcaster" });
+
+    const { enabled } = req.body as z.infer<typeof commentsEnabledSchema>;
+    await neonQuery("update live_sessions set comments_enabled = $1 where id = $2", [enabled, session.id]);
+    res.json({ commentsEnabled: enabled });
+  }
+);
 
 // =========================================================
 // POST /api/live/:id/end — broadcaster ends the stream
@@ -229,8 +283,9 @@ liveRouter.post("/:id/join", liveActionLimiter, async (req: AuthedRequest, res) 
     partnerId: session.partner_id,
     partnerUsername: session.partner_username,
     reactionCount: session.reaction_count,
+    commentsEnabled: session.comments_enabled,
     viewerCount,
-    comments: comments.reverse(),
+    comments: session.comments_enabled ? comments.reverse() : [],
   });
 });
 
@@ -263,15 +318,25 @@ liveRouter.get("/:id/state", liveActionLimiter, async (req: AuthedRequest, res) 
   }
 
   const after = typeof req.query.after === "string" ? req.query.after : null;
-  const comments = after
-    ? await neonQuery(
-        "select id, user_id, username, text, created_at from live_comments where session_id = $1 and created_at > $2 order by created_at asc limit 50",
-        [session.id, after]
-      )
-    : [];
+  const comments =
+    session.comments_enabled && after
+      ? await neonQuery(
+          "select id, user_id, username, text, created_at from live_comments where session_id = $1 and created_at > $2 order by created_at asc limit 50",
+          [session.id, after]
+        )
+      : [];
   const viewerCount = await getViewerCount(session.id);
 
-  res.json({ ended: false, reactionCount: session.reaction_count, viewerCount, comments });
+  res.json({
+    ended: false,
+    matchId: session.match_id,
+    partnerId: session.partner_id,
+    partnerUsername: session.partner_username,
+    reactionCount: session.reaction_count,
+    commentsEnabled: session.comments_enabled,
+    viewerCount,
+    comments,
+  });
 });
 
 // =========================================================
@@ -297,6 +362,7 @@ liveRouter.post("/:id/comment", liveCommentLimiter, validateBody(commentSchema),
 
   const session = await getActiveSession(req.params.id);
   if (!session) return res.status(404).json({ error: "session_not_found" });
+  if (!session.comments_enabled) return res.status(403).json({ error: "comments_disabled" });
   if (containsProfanity(text)) return res.status(400).json({ error: "comment_not_allowed" });
 
   const username = await getUsername(userId);
@@ -361,7 +427,7 @@ liveRouter.post("/:id/report", liveActionLimiter, validateBody(reportSchema), as
       .eq("id", session.broadcaster_id);
     await neonQuery("update live_sessions set status = 'ended', ended_at = now() where id = $1", [session.id]);
     await closeLiveSession(session);
-    await notifyCallEnded(session.match_id, "report");
+    if (session.match_id) await notifyCallEnded(session.match_id, "report");
   }
 
   res.json({ status: "reported" });

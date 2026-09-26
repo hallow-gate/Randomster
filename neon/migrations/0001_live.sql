@@ -29,7 +29,7 @@ create extension if not exists pgcrypto;
 create table if not exists live_sessions (
   id uuid primary key default gen_random_uuid(),
 
-  match_id uuid not null,               -- the underlying Randomster match (Supabase `matches.id`)
+  match_id uuid,                        -- null while the host is between strangers (searching for next)
   broadcaster_id uuid not null,
   broadcaster_username text not null,
   partner_id uuid,                      -- the random stranger the broadcaster is paired with, once matched
@@ -46,7 +46,13 @@ create table if not exists live_sessions (
   -- session is treated as abandoned and auto-closed by the feed/read paths
   -- instead of sitting active forever — there's no external cron on this
   -- database, so cleanup piggybacks on normal traffic.
-  last_heartbeat_at timestamptz not null default now()
+  last_heartbeat_at timestamptz not null default now(),
+
+  -- Host-controlled, same as other live platforms: turning this off hides
+  -- the comment box and existing comments from viewers (new comment
+  -- submissions are also rejected server-side while it's off). Reactions
+  -- are unaffected.
+  comments_enabled boolean not null default true
 );
 
 create index if not exists idx_live_sessions_status on live_sessions(status);
@@ -97,7 +103,7 @@ create index if not exists idx_live_comments_session_created on live_comments(se
 create table if not exists live_reports (
   id uuid primary key default gen_random_uuid(),
   session_id uuid not null,
-  match_id uuid not null,
+  match_id uuid,
   broadcaster_id uuid not null,
   reporter_id uuid not null,
   reason text not null,

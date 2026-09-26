@@ -40,6 +40,7 @@ export default function LiveViewer() {
   const [viewerCount, setViewerCount] = useState(0);
   const [reactionCount, setReactionCount] = useState(0);
   const [comments, setComments] = useState<LiveComment[]>([]);
+  const [commentsEnabled, setCommentsEnabled] = useState(true);
   const [ended, setEnded] = useState(false);
   const [joinFailed, setJoinFailed] = useState(false);
   const [viewersOpen, setViewersOpen] = useState(false);
@@ -72,6 +73,7 @@ export default function LiveViewer() {
         setViewerCount(data.viewerCount);
         setReactionCount(data.reactionCount);
         setComments(data.comments ?? []);
+        setCommentsEnabled(data.commentsEnabled ?? true);
         if (data.comments?.length) lastCommentAtRef.current = data.comments[data.comments.length - 1].created_at;
       })
       .catch(() => !cancelled && setJoinFailed(true));
@@ -97,6 +99,9 @@ export default function LiveViewer() {
         }
         setViewerCount(data.viewerCount);
         setReactionCount(data.reactionCount);
+        setCommentsEnabled(data.commentsEnabled ?? true);
+        setMatchId(data.matchId ?? null);
+        setPartnerUsername(data.partnerUsername ?? null);
         if (data.comments?.length) {
           setComments((prev) => [...prev, ...data.comments].slice(-100));
           lastCommentAtRef.current = data.comments[data.comments.length - 1].created_at;
@@ -178,7 +183,12 @@ export default function LiveViewer() {
       <main className="flex-1 flex items-center justify-center p-4 overflow-hidden">
         <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden">
           <video ref={primaryRef} autoPlay playsInline className="w-full h-full object-cover -scale-x-100" />
-          {callState !== "connected" && (
+          {!matchId && (
+            <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60 text-center px-4">
+              @{broadcasterUsername} is looking for the next stranger...
+            </div>
+          )}
+          {matchId && callState !== "connected" && (
             <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60">
               connecting to stream...
             </div>
@@ -194,7 +204,13 @@ export default function LiveViewer() {
             ● Live
           </div>
 
-          <CommentsOverlay comments={comments} onSend={sendComment} />
+          {commentsEnabled ? (
+            <CommentsOverlay comments={comments} onSend={sendComment} />
+          ) : (
+            <div className="absolute left-2 bottom-16 text-[10px] font-mono text-gray-400 bg-black/60 px-2 py-1">
+              comments are off
+            </div>
+          )}
 
           <div className="absolute right-2 bottom-16 flex flex-col items-center gap-2">
             <HeartReaction count={reactionCount} onReact={react} />
