@@ -58,6 +58,30 @@ profileRouter.post("/username", authLimiter, validateBody(usernameSchema), async
   res.json({ status: "ok", username });
 });
 
+/**
+ * Public profile lookup by username — powers the profile "stalk view"
+ * (looking up any user by @username) and the red live-ring on their
+ * avatar. Reads only public-safe columns; never exposes ban status, age
+ * verification, etc. `username` is `citext`, so this is already
+ * case-insensitive.
+ */
+profileRouter.get("/lookup/:username", async (req: AuthedRequest, res) => {
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select("id, username, country_code, total_likes, total_lives, is_live")
+    .eq("username", req.params.username)
+    .eq("is_banned", false)
+    .maybeSingle();
+
+  if (error) {
+    logger.error({ err: error.message }, "profile_lookup_failed");
+    return res.status(500).json({ error: "internal_error" });
+  }
+  if (!data) return res.status(404).json({ error: "user_not_found" });
+
+  res.json({ profile: data });
+});
+
 const countrySchema = z.object({
   countryCode: z.string().length(2).regex(/^[A-Z]{2}$/),
 });

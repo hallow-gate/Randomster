@@ -16,6 +16,7 @@ import { moderationRouter } from "./routes/moderation.js";
 import { ageVerificationRouter } from "./routes/ageVerification.js";
 import { ageVerificationWebhookRouter } from "./routes/ageVerificationWebhook.js";
 import { callsRouter } from "./routes/calls.js";
+import { liveRouter } from "./routes/live.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -71,6 +72,7 @@ app.use("/api/moderation", moderationRouter);
 app.use("/api/age-verification", ageVerificationRouter);
 app.use("/api/age-verification", ageVerificationWebhookRouter);
 app.use("/api/calls", callsRouter);
+app.use("/api/live", liveRouter);
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 

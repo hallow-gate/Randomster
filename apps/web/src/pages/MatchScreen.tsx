@@ -10,6 +10,7 @@ import { FlagBadge } from "../components/FlagBadge";
 import { TerminalLoader } from "../components/TerminalLoader";
 import { ChatPanel } from "../components/ChatPanel";
 import { ControlDock } from "../components/ControlDock";
+import { LiveButton } from "../components/LiveButton";
 
 export default function MatchScreen() {
   const { session, profile } = useAuthContext();
@@ -96,8 +97,11 @@ export default function MatchScreen() {
       <header className="shrink-0 flex items-center justify-between px-4 py-3 border-b-2 border-black">
         <h1 className="font-display font-bold text-lime">RANDOMSTER</h1>
         <div className="flex items-center gap-3">
+          <LiveButton />
           <FlagBadge countryCode={profile.country_code} />
-          <span className="font-mono text-xs text-gray-400">@{profile.username}</span>
+          <Link to={`/profile/${profile.username}`} className="font-mono text-xs text-gray-400 hover:text-lime">
+            @{profile.username}
+          </Link>
           <Link to="/settings" className="text-xs text-cyan underline">
             settings
           </Link>

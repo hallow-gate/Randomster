@@ -21,13 +21,15 @@
     "pino-http": "^10.3.0",
     "rate-limiter-flexible": "^5.0.3",
     "zod": "^3.23.8",
-    "jose": "^5.9.6"
+    "jose": "^5.9.6",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.5.5",
+    "@types/pg": "^8.11.10",
     "tsx": "^4.19.1",
     "typescript": "^5.6.2"
   }

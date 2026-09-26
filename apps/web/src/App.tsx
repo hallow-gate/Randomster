@@ -8,6 +8,10 @@ import MatchScreen from "./pages/MatchScreen";
 import Settings from "./pages/Settings";
 import AgeVerification from "./pages/AgeVerification";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
+import LiveFeed from "./pages/LiveFeed";
+import LiveBroadcast from "./pages/LiveBroadcast";
+import LiveViewer from "./pages/LiveViewer";
+import Profile from "./pages/Profile";
 
 function Router() {
   const { session, profile, loading, profileLoading } = useAuthContext();
@@ -42,6 +46,34 @@ function Router() {
         }
       />
       <Route path="/privacy" element={<PrivacyPolicy />} />
+      <Route
+        path="/live"
+        element={!session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <LiveFeed />}
+      />
+      <Route
+        path="/live/go"
+        element={!session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <LiveBroadcast />}
+      />
+      <Route
+        path="/live/:id"
+        element={!session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <LiveViewer />}
+      />
+      <Route
+        path="/profile"
+        element={
+          !session ? (
+            <Navigate to="/login" />
+          ) : needsUsername ? (
+            <Navigate to="/username" />
+          ) : (
+            <Navigate to={`/profile/${profile?.username}`} />
+          )
+        }
+      />
+      <Route
+        path="/profile/:username"
+        element={!session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <Profile />}
+      />
       <Route
         path="/"
         element={!session ? <Navigate to="/login" /> : needsUsername ? <Navigate to="/username" /> : <MatchScreen />}

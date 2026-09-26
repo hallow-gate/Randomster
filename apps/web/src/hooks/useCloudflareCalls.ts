@@ -38,7 +38,6 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
   const pulledPartnerKeyRef = useRef<string | null>(null);
   const pullInFlightRef = useRef<Promise<void> | null>(null);
   const connectStartedRef = useRef(false);
-  const videoSenderRef = useRef<RTCRtpSender | null>(null);
 
   const authedFetch = useCallback(async (path: string, body?: unknown, method = "POST") => {
     const { data } = await supabase.auth.getSession();
@@ -63,75 +62,6 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
     pullInFlightRef.current = null;
     connectStartedRef.current = false;
     remoteMediaStreamRef.current = null;
-
-    const MIN_VIDEO_BITRATE = 500_000;
-    const START_VIDEO_BITRATE = 1_500_000;
-    const MAX_VIDEO_BITRATE = 3_500_000;
-    let currentVideoBitrate = START_VIDEO_BITRATE;
-    let adaptiveInterval: ReturnType<typeof setInterval> | null = null;
-
-    // Picks a bitrate the connection can actually sustain right now,
-    // instead of a single fixed number that's either too conservative on a
-    // good connection or still too much on a bad one. Backs off hard and
-    // fast on real loss (packet loss under load is usually already visible
-    // as blockiness by the time you see it in stats), climbs back up slowly
-    // and only when there's healthy bandwidth margin to spare, and stops
-    // reacting to loss/RTT numbers from before the last change so it isn't
-    // constantly chasing its own tail.
-    function startAdaptiveBitrate(pc: RTCPeerConnection) {
-      let lastPacketsSent = 0;
-      let lastPacketsLost = 0;
-      let settleUntil = 0;
-
-      adaptiveInterval = setInterval(async () => {
-        const sender = videoSenderRef.current;
-        if (!sender || pc.connectionState !== "connected") return;
-
-        const stats = await pc.getStats(sender.track ?? undefined).catch(() => null);
-        if (!stats) return;
-
-        let packetsSent = 0;
-        let packetsLost = 0;
-        let availableOutgoingBitrate: number | undefined;
-        stats.forEach((report) => {
-          if (report.type === "outbound-rtp" && report.kind === "video") {
-            packetsSent = report.packetsSent ?? packetsSent;
-          }
-          if (report.type === "remote-inbound-rtp" && report.kind === "video") {
-            packetsLost = report.packetsLost ?? packetsLost;
-          }
-          if (report.type === "candidate-pair" && report.state === "succeeded") {
-            availableOutgoingBitrate = report.availableOutgoingBitrate ?? availableOutgoingBitrate;
-          }
-        });
-
-        const sentDelta = packetsSent - lastPacketsSent;
-        const lostDelta = packetsLost - lastPacketsLost;
-        lastPacketsSent = packetsSent;
-        lastPacketsLost = packetsLost;
-        const lossRatio = sentDelta > 0 ? Math.max(0, lostDelta) / sentDelta : 0;
-
-        const now = Date.now();
-        let nextBitrate = currentVideoBitrate;
-        if (lossRatio > 0.03) {
-          nextBitrate = Math.max(MIN_VIDEO_BITRATE, Math.round(currentVideoBitrate * 0.7));
-          settleUntil = now + 10_000; // give the drop time to actually help before reacting again
-        } else if (
-          now > settleUntil &&
-          availableOutgoingBitrate &&
-          availableOutgoingBitrate > currentVideoBitrate * 1.5
-        ) {
-          nextBitrate = Math.min(MAX_VIDEO_BITRATE, Math.round(currentVideoBitrate * 1.2));
-          settleUntil = now + 10_000;
-        }
-
-        if (Math.abs(nextBitrate - currentVideoBitrate) < 100_000) return;
-        currentVideoBitrate = nextBitrate;
-        const params = sender.getParameters();
-        params.encodings = [{ ...(params.encodings?.[0] ?? {}), maxBitrate: currentVideoBitrate }];
-        sender.setParameters(params).catch(() => {});
-      }, 4_000);
-    }
 
     // Ask Supabase to wait for the server to actually acknowledge each
     // broadcast before `send()` resolves, instead of firing-and-forgetting.
@@ -208,15 +138,11 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
           setRemoteStream(remote);
         };
         pc.onconnectionstatechange = () => {
-          if (pc.connectionState === "connected") {
-            setCallState("connected");
-            if (!adaptiveInterval) startAdaptiveBitrate(pc);
-          }
+          if (pc.connectionState === "connected") setCallState("connected");
           if (pc.connectionState === "failed") setCallState("failed");
         };
 
-        let videoTransceiver: RTCRtpTransceiver | null = null;
-        for (const track of localStream!.getTracks()) {
+        localStream!.getTracks().forEach((track) => {
           if (track.kind === "video") {
             // Hints the encoder to prioritize smooth motion/framerate over
             // per-frame sharpness -- the right trade-off for a talking-head
@@ -226,49 +152,22 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
           }
           const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
           if (track.kind === "video") {
-            videoTransceiver = transceiver;
-            videoSenderRef.current = transceiver.sender;
             const params = transceiver.sender.getParameters();
-            // This is just the *starting* bitrate now, not a fixed cap --
-            // `startAdaptiveBitrate` below raises it toward
-            // MAX_VIDEO_BITRATE when the connection can sustain more, and
-            // cuts it back toward MIN_VIDEO_BITRATE under real congestion,
-            // instead of picking one number that's either too conservative
-            // on a good connection or still too much on a bad one.
-            params.encodings = [{ maxBitrate: START_VIDEO_BITRATE, priority: "high" }];
+            // The video tile now renders capped at ~42vh/65vh (see
+            // MatchScreen) rather than stretching to fill the column, so
+            // encoding a full 2.5Mbps for a box that's rarely displayed
+            // anywhere near full 720p is wasted bandwidth and makes the
+            // encoder more likely to have to drop frames/quality under any
+            // network pressure -- which is often what shows up as visible
+            // blockiness. 1.5Mbps is comfortably enough for 720p30 at the
+            // sizes this actually renders at.
+            params.encodings = [{ maxBitrate: 1_500_000, priority: "high" }];
             transceiver.sender.setParameters(params).catch(() => {
               // Some browsers reject setParameters before the first
               // negotiation completes; not fatal, just keeps the default.
             });
           }
-        }
-
-        // VP9 encodes noticeably cleaner than VP8/H.264 at the same
-        // bitrate, which is most of what "better video quality" without
-        // more bandwidth actually buys you. This only *reorders* our
-        // offered codecs by preference -- every codec the browser already
-        // supported is still offered, just later in the list -- so if
-        // Cloudflare's Calls SFU or the other participant's browser can't
-        // do VP9, negotiation just falls back to VP8/H.264 as before rather
-        // than breaking.
-        if (videoTransceiver && typeof videoTransceiver.setCodecPreferences === "function") {
-          const capabilities = RTCRtpSender.getCapabilities?.("video");
-          if (capabilities) {
-            const rank = (mimeType: string) =>
-              ["video/VP9", "video/AV1", "video/H264", "video/VP8"].indexOf(mimeType);
-            const ordered = [...capabilities.codecs].sort((a, b) => {
-              const ra = rank(a.mimeType);
-              const rb = rank(b.mimeType);
-              return (ra === -1 ? 99 : ra) - (rb === -1 ? 99 : rb);
-            });
-            try {
-              videoTransceiver.setCodecPreferences(ordered);
-            } catch {
-              // Unsupported codec list shape in this browser -- keep
-              // whatever the browser would have negotiated by default.
-            }
-          }
-        }
+        });
 
         const { sessionId } = await authedFetch("/api/calls/session/new", { matchId });
         localSessionIdRef.current = sessionId;
@@ -413,12 +312,10 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
 
     return () => {
       cancelled = true;
-      if (adaptiveInterval) clearInterval(adaptiveInterval);
       signalChannel.unsubscribe();
       pcRef.current?.close();
       pcRef.current = null;
       remoteMediaStreamRef.current = null;
-      videoSenderRef.current = null;
       setRemoteStream(null);
       setCallState("ended");
     };
@@ -426,3 +323,4 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
 
   return { callState, remoteStream };
 }
+

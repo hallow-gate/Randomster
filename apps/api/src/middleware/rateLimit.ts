@@ -61,3 +61,33 @@ export const callsSignalingLimiter = rateLimit({
   keyGenerator: (req) => (req as AuthedRequest).userId ?? req.ip ?? "unknown",
   message: { error: "rate_limited" },
 });
+
+/** Live-stream comment limiter: same shape as chat's messageLimiter. */
+export const liveCommentLimiter = rateLimit({
+  windowMs: 1_000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as AuthedRequest).userId ?? req.ip ?? "unknown",
+  message: { error: "rate_limited" },
+});
+
+/** Heart reactions: generous but capped, so one viewer can't spam the tally. */
+export const liveReactionLimiter = rateLimit({
+  windowMs: 1_000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as AuthedRequest).userId ?? req.ip ?? "unknown",
+  message: { error: "rate_limited" },
+});
+
+/** Feed/viewer-list/comment polling and join/leave/start/end actions. */
+export const liveActionLimiter = rateLimit({
+  windowMs: 10_000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as AuthedRequest).userId ?? req.ip ?? "unknown",
+  message: { error: "rate_limited" },
+});

@@ -8,6 +8,11 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
   SUPABASE_JWT_SECRET: z.string().min(20),
 
+  // Separate Neon Postgres project. Holds ONLY ephemeral live-stream data
+  // (live_sessions / live_viewers / live_comments — see neon/migrations).
+  // Never used for accounts, matches, or anything Supabase already owns.
+  NEON_DATABASE_URL: z.string().min(1),
+
   ALLOWED_ORIGINS: z.string().min(1), // comma-separated
 
   CLOUDFLARE_ACCOUNT_ID: z.string().min(1),
