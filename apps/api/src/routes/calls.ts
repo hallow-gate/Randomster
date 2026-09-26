@@ -35,14 +35,14 @@ class CloudflareCallsError extends Error {
   }
 }
 
-async function cfFetch(path: string, body: unknown) {
+async function cfFetch(path: string, body?: unknown) {
   const res = await fetch(`${CALLS_BASE}${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_CALLS_APP_SECRET}`,
-      "Content-Type": "application/json",
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
-    body: JSON.stringify(body),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const data = await res.json().catch(() => null);
   if (!res.ok) {
@@ -88,7 +88,7 @@ callsRouter.post("/session/new", async (req: AuthedRequest, res) => {
 
   try {
     await assertActiveParticipant(req.userId!, parsed.data.matchId);
-    const data = await cfFetch("/sessions/new", {});
+    const data = await cfFetch("/sessions/new");
     res.json(data);
   } catch (err) {
     respondToCallsError(res, err);
