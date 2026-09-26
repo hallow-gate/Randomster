@@ -3,9 +3,14 @@ import { supabase, apiBaseUrl } from "../lib/supabase";
 
 type CallState = "idle" | "connecting" | "connected" | "failed" | "ended";
 
+interface TrackInfo {
+  trackName: string;
+  kind: "audio" | "video";
+}
+
 interface SignalPayload {
   sessionId: string;
-  trackName: string;
+  tracks: TrackInfo[];
 }
 
 /**
@@ -18,7 +23,7 @@ interface SignalPayload {
  * session is a strict single-outstanding-negotiation state machine and
  * rejects a second concurrent call with `invalid_session_description`.
  *
- * Signaling (exchanging each side's Cloudflare sessionId + trackName so the
+ * Signaling (exchanging each side's Cloudflare sessionId + trackNames so the
  * other side knows what to *pull*) happens over a Supabase Realtime
  * Broadcast channel scoped to `match:{matchId}`, which only the two match
  * participants ever join.
@@ -28,7 +33,8 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localSessionIdRef = useRef<string | null>(null);
-  const localTrackNameRef = useRef<string | null>(null);
+  const localTracksRef = useRef<TrackInfo[]>([]);
+  const remoteMediaStreamRef = useRef<MediaStream | null>(null);
   const pulledPartnerKeyRef = useRef<string | null>(null);
   const pullInFlightRef = useRef<Promise<void> | null>(null);
   const connectStartedRef = useRef(false);
@@ -55,6 +61,7 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
     pulledPartnerKeyRef.current = null;
     pullInFlightRef.current = null;
     connectStartedRef.current = false;
+    remoteMediaStreamRef.current = null;
 
     // Ask Supabase to wait for the server to actually acknowledge each
     // broadcast before `send()` resolves, instead of firing-and-forgetting.
@@ -70,24 +77,24 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
     // Supabase broadcast never replays to a client that subscribes after the
     // message was sent. If peer A finishes connecting and announces its
     // session-info before peer B has subscribed, B never learns how to pull
-    // A's track -- the call looks "connected" (A's own PC is up) but the
+    // A's tracks -- the call looks "connected" (A's own PC is up) but the
     // remote video never arrives. To close that race, whoever announces
     // records that fact, and re-announces on request; whoever subscribes
     // asks for a resend right away in case they were the late joiner.
     //
-    // A re-announce for a track we've *already* pulled is a harmless no-op
+    // A re-announce for tracks we've *already* pulled is a harmless no-op
     // for the reader (see `pulledPartnerKeyRef` below) -- it's only ever a
     // duplicate delivery of the same session-info, never a reason to pull
     // twice.
     async function announceSessionInfo() {
       const sessionId = localSessionIdRef.current;
-      const trackName = localTrackNameRef.current;
-      if (!sessionId || !trackName) return;
+      const tracks = localTracksRef.current;
+      if (!sessionId || tracks.length === 0) return;
       announced = true;
       await signalChannel.send({
         type: "broadcast",
         event: "session-info",
-        payload: { sessionId, trackName } satisfies SignalPayload,
+        payload: { sessionId, tracks } satisfies SignalPayload,
       });
     }
 
@@ -114,8 +121,21 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
         const pc = new RTCPeerConnection({ iceServers });
         pcRef.current = pc;
 
+        // Cloudflare doesn't always associate pulled tracks with a shared
+        // `MediaStream`/msid the way a single local getUserMedia stream
+        // does, so `event.streams[0]` isn't reliable once we're pulling
+        // more than one remote track (audio + video). Build one durable
+        // MediaStream ourselves and feed every incoming track into it --
+        // <video srcObject> updates live as tracks are added, no matter
+        // how many separate `ontrack` events they arrive in.
+        remoteMediaStreamRef.current = new MediaStream();
         pc.ontrack = (event) => {
-          setRemoteStream(event.streams[0] ?? null);
+          const remote = remoteMediaStreamRef.current!;
+          if (!remote.getTracks().includes(event.track)) {
+            remote.addTrack(event.track);
+          }
+          event.track.addEventListener("ended", () => remote.removeTrack(event.track));
+          setRemoteStream(remote);
         };
         pc.onconnectionstatechange = () => {
           if (pc.connectionState === "connected") setCallState("connected");
@@ -140,13 +160,25 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        const trackName = `track-${crypto.randomUUID()}`;
-        localTrackNameRef.current = trackName;
+        // One push entry per transceiver -- previously this only sent
+        // `getTransceivers()[0]`, so with both an audio and a video track
+        // added above, whichever track ended up at index 0 was the only one
+        // ever registered with Cloudflare under a trackName. The other
+        // track stayed in the SDP (so it looked "sent") but Cloudflare had
+        // no trackName for it, so it could never be pulled by the partner --
+        // this is why only audio (or only video) ever arrived on the other
+        // end.
+        const pushTracks: (TrackInfo & { mid?: string })[] = pc.getTransceivers().map((t) => ({
+          trackName: `track-${t.sender.track?.kind ?? "unknown"}-${crypto.randomUUID()}`,
+          kind: (t.sender.track?.kind ?? "audio") as "audio" | "video",
+          mid: t.mid ?? undefined,
+        }));
+        localTracksRef.current = pushTracks.map(({ trackName, kind }) => ({ trackName, kind }));
 
         const pushResult = await authedFetch("/api/calls/tracks/push", {
           matchId,
           sessionId,
-          tracks: [{ location: "local", trackName, mid: pc.getTransceivers()[0]?.mid ?? "0" }],
+          tracks: pushTracks.map(({ trackName, mid }) => ({ location: "local" as const, trackName, mid })),
           sessionDescription: { type: "offer", sdp: offer.sdp },
         });
 
@@ -154,7 +186,7 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
 
         if (cancelled) return;
 
-        // Tell the other participant how to find our published track.
+        // Tell the other participant how to find our published tracks.
         await announceSessionInfo();
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -166,16 +198,19 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
     async function pullPartnerTrack(partner: SignalPayload) {
       const pc = pcRef.current;
       const sessionId = localSessionIdRef.current;
-      if (!pc || !sessionId) return;
+      if (!pc || !sessionId || partner.tracks.length === 0) return;
 
-      const partnerKey = `${partner.sessionId}:${partner.trackName}`;
+      const partnerKey = `${partner.sessionId}:${partner.tracks
+        .map((t) => t.trackName)
+        .sort()
+        .join(",")}`;
 
-      // Once we've *successfully* pulled a given partner track, further
-      // (re-)announcements of that same track are no-ops.
+      // Once we've *successfully* pulled a given partner track set, further
+      // (re-)announcements of that same set are no-ops.
       if (pulledPartnerKeyRef.current === partnerKey) return;
 
       // A resend can arrive while our first attempt for the very same
-      // track is still in flight (the resend is triggered by the partner's
+      // tracks is still in flight (the resend is triggered by the partner's
       // own `request-session-info`, which races independently of our pull).
       // Awaiting -- rather than re-entering -- the existing attempt is what
       // actually prevents two concurrent `tracks/pull` calls on our own
@@ -189,10 +224,17 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
 
       const attempt = (async () => {
         try {
+          // Pull every announced remote track (audio + video) in a single
+          // call -- one request per track would mean the second request
+          // races the first's renegotiation on the very same session.
           const pullResult = await authedFetch("/api/calls/tracks/pull", {
             matchId,
             sessionId,
-            tracks: [{ location: "remote", sessionId: partner.sessionId, trackName: partner.trackName }],
+            tracks: partner.tracks.map((t) => ({
+              location: "remote" as const,
+              sessionId: partner.sessionId,
+              trackName: t.trackName,
+            })),
           });
 
           if (pullResult.requiresImmediateRenegotiation) {
@@ -213,7 +255,7 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
             );
           }
 
-          // Only mark this partner track as done once the whole
+          // Only mark this partner track set as done once the whole
           // pull-and-renegotiate sequence has actually succeeded.
           pulledPartnerKeyRef.current = partnerKey;
         } catch (err) {
@@ -258,6 +300,7 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
       signalChannel.unsubscribe();
       pcRef.current?.close();
       pcRef.current = null;
+      remoteMediaStreamRef.current = null;
       setRemoteStream(null);
       setCallState("ended");
     };
@@ -265,3 +308,4 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
 
   return { callState, remoteStream };
 }
+
