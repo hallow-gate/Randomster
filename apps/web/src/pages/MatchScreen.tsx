@@ -24,6 +24,9 @@ export default function MatchScreen() {
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  // Defaults to 16:9 (matches the `aspect-video` fallback class below) until
+  // we know the stranger's actual camera shape.
+  const [remoteAspectRatio, setRemoteAspectRatio] = useState(16 / 9);
 
   useEffect(() => {
     if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
@@ -31,6 +34,32 @@ export default function MatchScreen() {
 
   useEffect(() => {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+  }, [remoteStream]);
+
+  useEffect(() => {
+    const video = remoteVideoRef.current;
+    if (!video) return;
+    // A lot of webcams (laptops especially) actually capture 4:3, not the
+    // 16:9 the constraints request as "ideal" -- getUserMedia falls back
+    // silently when the camera doesn't support it. Forcing that into a
+    // fixed 16:9 box and cropping to fill (`object-cover`) is exactly what
+    // "too zoomed in" looks like: the top and bottom of the frame (which is
+    // where headroom above the face lives) get cut off. Reading the real
+    // dimensions off the incoming stream and matching the box to them means
+    // there's nothing left to crop -- the box's shape *is* the video's
+    // shape, so `object-cover` can't zoom in on anything.
+    const updateAspectRatio = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setRemoteAspectRatio(video.videoWidth / video.videoHeight);
+      }
+    };
+    updateAspectRatio();
+    video.addEventListener("loadedmetadata", updateAspectRatio);
+    video.addEventListener("resize", updateAspectRatio);
+    return () => {
+      video.removeEventListener("loadedmetadata", updateAspectRatio);
+      video.removeEventListener("resize", updateAspectRatio);
+    };
   }, [remoteStream]);
 
   useEffect(() => {
@@ -94,7 +123,8 @@ export default function MatchScreen() {
             for the controls and chat that live under it in the same column.
           */}
           <div
-            className={`relative w-full mx-auto aspect-video max-h-[42vh] md:max-h-[65vh] bg-black border-2 border-white shadow-brutal overflow-hidden ${
+            style={{ aspectRatio: remoteAspectRatio }}
+            className={`relative w-full mx-auto aspect-video max-h-[42vh] md:max-h-[65vh] bg-black border-2 border-black shadow-brutal overflow-hidden ${
               scanlinesOn ? "scanlines" : ""
             }`}
           >

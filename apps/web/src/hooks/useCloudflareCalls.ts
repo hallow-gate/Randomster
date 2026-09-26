@@ -143,10 +143,25 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
         };
 
         localStream!.getTracks().forEach((track) => {
+          if (track.kind === "video") {
+            // Hints the encoder to prioritize smooth motion/framerate over
+            // per-frame sharpness -- the right trade-off for a talking-head
+            // call (vs. e.g. screen-share, which wants "detail"). Widely
+            // supported and doesn't require any SDP/renegotiation dance.
+            track.contentHint = "motion";
+          }
           const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
           if (track.kind === "video") {
             const params = transceiver.sender.getParameters();
-            params.encodings = [{ maxBitrate: 2_500_000, priority: "high" }];
+            // The video tile now renders capped at ~42vh/65vh (see
+            // MatchScreen) rather than stretching to fill the column, so
+            // encoding a full 2.5Mbps for a box that's rarely displayed
+            // anywhere near full 720p is wasted bandwidth and makes the
+            // encoder more likely to have to drop frames/quality under any
+            // network pressure -- which is often what shows up as visible
+            // blockiness. 1.5Mbps is comfortably enough for 720p30 at the
+            // sizes this actually renders at.
+            params.encodings = [{ maxBitrate: 1_500_000, priority: "high" }];
             transceiver.sender.setParameters(params).catch(() => {
               // Some browsers reject setParameters before the first
               // negotiation completes; not fatal, just keeps the default.
