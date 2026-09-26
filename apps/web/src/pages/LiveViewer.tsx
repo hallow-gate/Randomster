@@ -150,7 +150,7 @@ export default function LiveViewer() {
 
   if (joinFailed || ended) {
     return (
-      <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-black">
+      <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-charcoal">
         <p className="text-gray-400 font-mono text-sm">
           {ended ? "This stream just ended." : "This stream isn't live anymore."}
         </p>
@@ -160,27 +160,34 @@ export default function LiveViewer() {
   }
 
   return (
-    <div className="h-dvh flex flex-col overflow-hidden bg-black">
-      <header className="shrink-0 flex items-center justify-between px-4 py-3 border-b-2 border-black">
-        <button onClick={() => navigate("/live")} className="text-xs text-cyan underline">
-          back
+    <div className="h-dvh flex flex-col overflow-hidden bg-charcoal text-white">
+      <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-3 border-b-2 border-black bg-black/40">
+        <button
+          onClick={() => navigate("/live")}
+          className="font-mono text-[11px] text-cyan border border-cyan/40 px-2 py-1 hover:bg-cyan/10 shrink-0"
+        >
+          ← back
         </button>
-        <div className="flex items-center gap-2 font-mono text-xs text-gray-300">
-          <span className="text-lime">@{broadcasterUsername}</span>
-          {partnerUsername && <span>+ @{partnerUsername}</span>}
+
+        <div className="flex items-center gap-2 font-mono text-xs text-gray-300 min-w-0 justify-center flex-1">
+          <span className="text-lime truncate">@{broadcasterUsername}</span>
+          {partnerUsername && <span className="text-gray-500 truncate">+ @{partnerUsername}</span>}
         </div>
+
         <button
           onClick={() => {
             setViewersOpen((v) => !v);
             if (!viewersOpen) refreshViewers();
           }}
-          className="text-xs text-cyan underline"
+          className={`font-mono text-[11px] px-2 py-1 border shrink-0 ${
+            viewersOpen ? "text-black bg-cyan border-black" : "text-cyan border-cyan/40 hover:bg-cyan/10"
+          }`}
         >
-          {viewerCount} watching
+          👁 {viewerCount}
         </button>
       </header>
 
-      <main className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+      <main className="flex-1 flex items-center justify-center p-3 sm:p-4 overflow-hidden">
         <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden">
           <video ref={primaryRef} autoPlay playsInline className="w-full h-full object-cover -scale-x-100" />
           {!matchId && (
@@ -223,7 +230,7 @@ export default function LiveViewer() {
           </div>
 
           {viewersOpen && (
-            <div className="absolute top-9 right-2 w-40 max-h-48 overflow-y-auto bg-black/85 border-2 border-cyan p-2 text-[11px] font-mono text-white">
+            <div className="absolute top-2 right-2 w-40 max-h-48 overflow-y-auto bg-black/85 border-2 border-cyan p-2 text-[11px] font-mono text-white">
               {viewers.length === 0 && <p className="text-gray-500">no other viewers yet</p>}
               {viewers.map((v) => (
                 <p key={v.user_id} className="truncate">

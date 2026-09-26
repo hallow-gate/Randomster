@@ -10,6 +10,7 @@ import { TerminalLoader } from "../components/TerminalLoader";
 import { ControlDock } from "../components/ControlDock";
 import { CommentsOverlay, type LiveComment } from "../components/CommentsOverlay";
 import { HeartReaction } from "../components/HeartReaction";
+import { ChatPanel } from "../components/ChatPanel";
 import { supabase, apiBaseUrl } from "../lib/supabase";
 
 async function authedFetch(path: string, body?: unknown, method = "POST") {
@@ -52,13 +53,27 @@ export default function LiveBroadcast() {
   const { stream: localStream, micMuted, camOff, toggleMic, toggleCam, error: mediaError } = useLocalMedia(true);
   const { callState, remoteStream } = useCloudflareCalls(matchId, localStream);
 
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  // Both video elements stay mounted for the whole lifetime of the page —
+  // they're never conditionally added/removed from the tree. Only *which
+  // stream* they show, and whether the PIP is visible, changes. This is
+  // what fixes the self-preview going blank: a `<video>` that gets
+  // unmounted and a fresh one mounted in its place (e.g. by swapping
+  // between "big local view" and "small local PIP" in a ternary) never
+  // gets `srcObject` re-applied unless the *stream itself* changes — and
+  // the host's own camera stream doesn't change on Next/matched/unmatched,
+  // only which box it should appear in does. Keeping one stable element
+  // per role and re-pointing its `srcObject` whenever either stream
+  // changes sidesteps that entirely.
+  const mainVideoRef = useRef<HTMLVideoElement>(null);
+  const pipVideoRef = useRef<HTMLVideoElement>(null);
+
   const [liveId, setLiveId] = useState<string | null>(null);
   const [viewerCount, setViewerCount] = useState(0);
   const [reactionCount, setReactionCount] = useState(0);
   const [comments, setComments] = useState<LiveComment[]>([]);
   const [commentsEnabled, setCommentsEnabled] = useState(true);
+  const [commentsBusy, setCommentsBusy] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const lastCommentAtRef = useRef<string | null>(null);
   const liveIdRef = useRef<string | null>(null);
   const startedMatchIdRef = useRef<string | null>(null);
@@ -68,12 +83,18 @@ export default function LiveBroadcast() {
     liveIdRef.current = liveId;
   }, [liveId]);
 
+  // Main box: show the stranger once connected, otherwise fall back to the
+  // host's own camera so the box is never empty while waiting/searching.
   useEffect(() => {
-    if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
+    if (mainVideoRef.current) mainVideoRef.current.srcObject = remoteStream ?? localStream ?? null;
+  }, [remoteStream, localStream]);
+
+  // PIP: always the host's own camera. Visibility (not mount state) is
+  // toggled by CSS depending on whether the main box is currently showing
+  // the stranger.
+  useEffect(() => {
+    if (pipVideoRef.current) pipVideoRef.current.srcObject = localStream ?? null;
   }, [localStream]);
-  useEffect(() => {
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-  }, [remoteStream]);
 
   useEffect(() => {
     if (state === "matched") sound.play("connect");
@@ -105,6 +126,7 @@ export default function LiveBroadcast() {
   // itself is untouched.
   useEffect(() => {
     if (state !== "ended" || endingRef.current || !profile) return;
+    setChatOpen(false);
     (async () => {
       await clearPartner();
       resetAfterEnd();
@@ -159,28 +181,36 @@ export default function LiveBroadcast() {
 
   const handleSkip = async () => {
     sound.play("click");
+    setChatOpen(false);
     await clearPartner();
     skip();
   };
 
   const handleNext = async () => {
     sound.play("click");
+    setChatOpen(false);
     await clearPartner();
     next(profile.match_scope);
   };
 
   const handleBlock = async () => {
+    setChatOpen(false);
     await clearPartner();
     block();
   };
 
   const toggleComments = async () => {
-    if (!liveId) return;
+    if (!liveId || commentsBusy) return;
     const enabled = !commentsEnabled;
+    setCommentsBusy(true);
     setCommentsEnabled(enabled);
-    authedFetch(`/api/live/${liveId}/comments-enabled`, { enabled }, "PATCH").catch(() => {
+    try {
+      await authedFetch(`/api/live/${liveId}/comments-enabled`, { enabled }, "PATCH");
+    } catch {
       setCommentsEnabled(!enabled); // revert on failure
-    });
+    } finally {
+      setCommentsBusy(false);
+    }
   };
 
   const handleEndLive = async () => {
@@ -191,113 +221,209 @@ export default function LiveBroadcast() {
   };
 
   const searching = state === "queued";
+  const showingStranger = !!remoteStream;
+  const chatAvailable = state === "matched" && !!matchId && !!selfId;
 
   return (
-    <div className="h-dvh flex flex-col overflow-hidden bg-black">
-      <header className="shrink-0 flex items-center justify-between px-4 py-3 border-b-2 border-black">
-        <h1 className="font-display font-bold text-lime">GO LIVE</h1>
-        <div className="flex items-center gap-3">
+    <div className="h-dvh flex flex-col overflow-hidden bg-charcoal text-white">
+      {/* ---------------------------------------------------------------- */}
+      {/* Header: identity/status on the left, all host controls grouped  */}
+      {/* on the right as compact icon-pills instead of scattered text     */}
+      {/* links, so nothing gets missed or mistaken for decoration.        */}
+      {/* ---------------------------------------------------------------- */}
+      <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-3 border-b-2 border-black bg-black/40">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="flex items-center gap-1 bg-magenta text-black text-[10px] font-display font-bold uppercase px-2 py-1 border border-black shrink-0">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-black opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-black" />
+            </span>
+            Live
+          </span>
+          <h1 className="font-display font-bold text-lime text-sm truncate hidden sm:block">GO LIVE</h1>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
           {liveId && (
-            <button onClick={toggleComments} className="text-[10px] font-mono text-cyan underline">
-              {commentsEnabled ? "hide comments" : "show comments"}
+            <span className="font-mono text-[11px] text-cyan bg-black/50 px-2 py-1 border border-cyan/40">
+              👁 {viewerCount}
+            </span>
+          )}
+          {liveId && (
+            <button
+              onClick={toggleComments}
+              disabled={commentsBusy}
+              title={commentsEnabled ? "Hide comments from viewers" : "Show comments to viewers"}
+              className={`font-mono text-[11px] px-2 py-1 border transition-colors disabled:opacity-50 ${
+                commentsEnabled
+                  ? "text-cyan border-cyan/40 hover:bg-cyan/10"
+                  : "text-gray-400 border-gray-600 hover:bg-white/5"
+              }`}
+            >
+              {commentsEnabled ? "💬 On" : "🚫 Off"}
             </button>
           )}
-          {liveId && <span className="font-mono text-xs text-cyan">{viewerCount} watching</span>}
+          {chatAvailable && (
+            <button
+              onClick={() => setChatOpen((v) => !v)}
+              title="Chat with the stranger"
+              className={`md:hidden font-mono text-[11px] px-2 py-1 border transition-colors ${
+                chatOpen ? "text-black bg-lime border-black" : "text-lime border-lime/40 hover:bg-lime/10"
+              }`}
+            >
+              💬 Chat
+            </button>
+          )}
+          {liveId && (
+            <button
+              onClick={handleEndLive}
+              className="font-mono text-[11px] text-black bg-red-400 hover:bg-red-300 px-2 py-1 border border-black uppercase font-bold"
+            >
+              End
+            </button>
+          )}
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-4 gap-4 overflow-hidden">
-        {/* Video container: the host's own camera is always live the
-            moment this page mounts (see useLocalMedia(true) above), well
-            before — and well after — any stranger is connected. */}
-        <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden">
-          {remoteStream ? (
-            <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover -scale-x-100" />
-          ) : (
-            localStream && (
-              <video
-                ref={localVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover -scale-x-100"
-              />
-            )
-          )}
-
-          {remoteStream && localStream && (
+      {/* ---------------------------------------------------------------- */}
+      {/* Body: video + controls in the main column; on md+ screens the    */}
+      {/* private stranger-chat gets its own permanent side panel (same     */}
+      {/* idea as MatchScreen) instead of competing for space over the     */}
+      {/* video with the public viewer comments.                           */}
+      {/* ---------------------------------------------------------------- */}
+      <main className="flex-1 flex flex-col md:flex-row gap-4 p-3 sm:p-4 overflow-hidden min-h-0">
+        <div className="flex flex-col items-center gap-3 min-h-0 flex-1 overflow-y-auto md:overflow-hidden">
+          <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden shrink-0">
+            {/* Main box: stranger when connected, otherwise the host's own
+                camera — a single element whose srcObject is re-pointed,
+                never swapped for a different DOM node. */}
             <video
-              ref={localVideoRef}
+              ref={mainVideoRef}
+              autoPlay
+              playsInline
+              muted={!showingStranger}
+              className={`w-full h-full object-cover ${showingStranger ? "" : "-scale-x-100"}`}
+            />
+
+            {/* Self PIP: always mounted, shown only once a stranger takes
+                over the main box. */}
+            <video
+              ref={pipVideoRef}
               autoPlay
               playsInline
               muted
-              className="absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 object-cover border-2 border-lime shadow-brutal-sm -scale-x-100"
+              className={`absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 object-cover border-2 border-lime shadow-brutal-sm -scale-x-100 ${
+                showingStranger ? "block" : "hidden"
+              }`}
             />
-          )}
 
-          {!localStream && !remoteStream && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-600 text-sm">
-              starting camera...
-            </div>
-          )}
-          {state === "matched" && !remoteStream && callState === "connecting" && (
-            <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60">
-              connecting stranger...
-            </div>
-          )}
-          {searching && liveId && (
-            <div className="absolute inset-x-0 bottom-0 bg-black/70 text-cyan text-xs font-mono text-center py-1">
-              looking for the next stranger...
-            </div>
-          )}
+            {!localStream && !remoteStream && (
+              <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm font-mono">
+                starting camera...
+              </div>
+            )}
+            {state === "matched" && !remoteStream && callState === "connecting" && (
+              <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60">
+                connecting stranger...
+              </div>
+            )}
+            {searching && liveId && (
+              <div className="absolute inset-x-0 bottom-0 bg-black/70 text-cyan text-xs font-mono text-center py-1">
+                looking for the next stranger...
+              </div>
+            )}
 
-          <div className="absolute top-2 left-2 flex items-center gap-1 bg-magenta text-black text-[10px] font-display font-bold uppercase px-1.5 py-0.5 border border-black">
-            ● Live
+            <div className="absolute top-2 left-2 flex items-center gap-1 bg-magenta text-black text-[10px] font-display font-bold uppercase px-1.5 py-0.5 border border-black">
+              ● Live
+            </div>
+
+            {liveId &&
+              (commentsEnabled ? (
+                <CommentsOverlay comments={comments} onSend={() => {}} disabled />
+              ) : (
+                <div className="absolute left-2 bottom-3 text-[10px] font-mono text-gray-400 bg-black/60 px-2 py-1">
+                  comments hidden from viewers
+                </div>
+              ))}
+
+            {liveId && (
+              <div className="absolute right-2 bottom-16">
+                <HeartReaction count={reactionCount} onReact={() => {}} />
+              </div>
+            )}
           </div>
 
-          {liveId && commentsEnabled && <CommentsOverlay comments={comments} onSend={() => {}} disabled />}
+          {mediaError && <p className="text-magenta text-xs shrink-0">Camera/mic error: {mediaError}</p>}
 
-          {liveId && (
-            <div className="absolute right-2 bottom-16">
-              <HeartReaction count={reactionCount} onReact={() => {}} />
+          {state === "idle" && (
+            <div className="flex flex-col items-center gap-3 shrink-0">
+              <p className="text-xs text-gray-400 font-mono max-w-xs text-center">
+                You'll be paired with a random stranger, and your call goes on the live feed for others to watch.
+              </p>
+              <BrutalButton onClick={handleStart}>Start Live</BrutalButton>
+            </div>
+          )}
+
+          {state === "queued" && (
+            <div className="shrink-0">
+              <TerminalLoader countryCode={profile.country_code} />
+            </div>
+          )}
+
+          {state === "matched" && matchId && (
+            <div className="w-full max-w-md shrink-0">
+              <ControlDock
+                onSkip={handleSkip}
+                onNext={handleNext}
+                onReport={(reason, details) => report(reason, details)}
+                onBlock={handleBlock}
+                micMuted={micMuted}
+                camOff={camOff}
+                onToggleMic={toggleMic}
+                onToggleCam={toggleCam}
+                soundMuted={sound.muted}
+                onToggleSound={sound.toggleMuted}
+              />
             </div>
           )}
         </div>
 
-        {mediaError && <p className="text-magenta text-xs">Camera/mic error: {mediaError}</p>}
-
-        {state === "idle" && (
-          <div className="flex flex-col items-center gap-3">
-            <p className="text-xs text-gray-400 font-mono max-w-xs text-center">
-              You'll be paired with a random stranger, and your call goes on the live feed for others to watch.
-            </p>
-            <BrutalButton onClick={handleStart}>Start Live</BrutalButton>
+        {/* Desktop chat side panel — permanently visible once matched,
+            exactly mirroring MatchScreen's layout so the host can talk to
+            the stranger while the stream keeps running. */}
+        {chatAvailable && (
+          <div className="hidden md:flex md:flex-col md:w-80 md:h-full min-h-0 gap-2">
+            <p className="text-[11px] font-mono text-lime uppercase shrink-0">chat with stranger</p>
+            <div className="flex-1 min-h-0">
+              <ChatPanel key={matchId} matchId={matchId!} selfId={selfId!} />
+            </div>
           </div>
         )}
-
-        {state === "queued" && <TerminalLoader countryCode={profile.country_code} />}
-
-        {state === "matched" && matchId && (
-          <ControlDock
-            onSkip={handleSkip}
-            onNext={handleNext}
-            onReport={(reason, details) => report(reason, details)}
-            onBlock={handleBlock}
-            micMuted={micMuted}
-            camOff={camOff}
-            onToggleMic={toggleMic}
-            onToggleCam={toggleCam}
-            soundMuted={sound.muted}
-            onToggleSound={sound.toggleMuted}
-          />
-        )}
-
-        {liveId && (
-          <button onClick={handleEndLive} className="text-xs text-red-400 underline font-mono">
-            End Live
-          </button>
-        )}
       </main>
+
+      {/* Mobile chat drawer — same ChatPanel, slid up from the bottom so it
+          never has to share screen space with the video while closed. */}
+      {chatAvailable && chatOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-50 bg-black/70 flex flex-col justify-end"
+          onClick={() => setChatOpen(false)}
+        >
+          <div
+            className="h-[70dvh] bg-charcoal border-t-2 border-lime flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b-2 border-lime shrink-0">
+              <span className="text-xs font-mono text-lime uppercase">chat with stranger</span>
+              <button onClick={() => setChatOpen(false)} className="text-xs text-gray-400 font-mono underline">
+                close
+              </button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <ChatPanel key={matchId} matchId={matchId!} selfId={selfId!} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

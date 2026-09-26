@@ -230,7 +230,7 @@ export default function MatchScreen() {
             scrolls exactly like a chat app's should. */}
         {state === "matched" && matchId && selfId && (
           <div className="flex-1 min-h-0 md:flex-none md:w-96 md:h-full">
-            <ChatPanel matchId={matchId} selfId={selfId} />
+            <ChatPanel key={matchId} matchId={matchId} selfId={selfId} />
           </div>
         )}
       </main>
