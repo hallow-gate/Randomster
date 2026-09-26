@@ -26,6 +26,7 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localSessionIdRef = useRef<string | null>(null);
   const localTrackNameRef = useRef<string | null>(null);
+  const pulledPartnerKeyRef = useRef<string | null>(null);
 
   const authedFetch = useCallback(async (path: string, body?: unknown, method = "POST") => {
     const { data } = await supabase.auth.getSession();
@@ -46,6 +47,7 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
     if (!matchId || !localStream) return;
     let cancelled = false;
     let announced = false;
+    pulledPartnerKeyRef.current = null;
     const signalChannel = supabase.channel(`match:${matchId}`, { config: { broadcast: { self: false } } });
 
     // Supabase broadcast never replays to a client that subscribes after the
@@ -134,6 +136,19 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
       const pc = pcRef.current;
       const sessionId = localSessionIdRef.current;
       if (!pc || !sessionId) return;
+
+      // The late-join resend mechanism above can legitimately cause the
+      // same partner session-info to arrive more than once (e.g. both sides
+      // request a resend around the same time). Pulling/renegotiating twice
+      // for the same track isn't just wasteful -- Cloudflare rejects a
+      // second renegotiation while one is already outstanding
+      // (invalid_session_description), which is what was causing the black
+      // screen. Once we've pulled a given partner track, further
+      // announcements of that same track are no-ops.
+      const partnerKey = `${partner.sessionId}:${partner.trackName}`;
+      if (pulledPartnerKeyRef.current === partnerKey) return;
+      pulledPartnerKeyRef.current = partnerKey;
+
       try {
         const pullResult = await authedFetch("/api/calls/tracks/pull", {
           matchId,
@@ -154,6 +169,9 @@ export function useCloudflareCalls(matchId: string | null, localStream: MediaStr
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error("cloudflare_calls_pull_failed", err);
+        // Allow a future announcement to retry -- this was a real failure,
+        // not the harmless duplicate the guard above is meant to catch.
+        pulledPartnerKeyRef.current = null;
       }
     }
 
