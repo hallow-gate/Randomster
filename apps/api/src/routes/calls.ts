@@ -3,7 +3,7 @@ import { z } from "zod";
 import { env } from "../lib/env.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { requireNotBanned } from "../middleware/banGate.js";
-import { matchActionLimiter } from "../middleware/rateLimit.js";
+import { callsSignalingLimiter } from "../middleware/rateLimit.js";
 import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { logger } from "../lib/logger.js";
 
@@ -22,7 +22,7 @@ import { logger } from "../lib/logger.js";
  * someone else's call.
  */
 export const callsRouter = Router();
-callsRouter.use(requireAuth, requireNotBanned, matchActionLimiter);
+callsRouter.use(requireAuth, requireNotBanned, callsSignalingLimiter);
 
 const CALLS_BASE = `https://rtc.live.cloudflare.com/v1/apps/${env.CLOUDFLARE_CALLS_APP_ID}`;
 
@@ -33,6 +33,40 @@ class CloudflareCallsError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+/**
+ * Cloudflare Calls sessions are a strict single-outstanding-negotiation
+ * state machine: pushing tracks, pulling tracks, and renegotiating all call
+ * the same per-session signaling endpoint, and a session can't process a
+ * second one of these while the first hasn't been fully settled. Two
+ * requests for the *same* sessionId that reach Cloudflare concurrently (a
+ * push racing a pull, or two pulls racing each other -- which happens
+ * legitimately here, since the partner's track-announcement can be
+ * re-broadcast and trigger a second pull attempt from the client) come back
+ * as `invalid_session_description` / 406 → we were surfacing that to the
+ * client as a hard 502, killing the call instead of just serializing.
+ *
+ * This queues same-session operations per sessionId so they run strictly
+ * one-at-a-time, in arrival order, regardless of how the client raced them.
+ * It's per-process only (fine for a single API instance; if this is ever
+ * scaled to multiple instances sharing one Cloudflare app, this needs to
+ * move to a shared lock, e.g. in Postgres or Redis).
+ */
+const sessionQueues = new Map<string, Promise<unknown>>();
+
+function withSessionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = sessionQueues.get(sessionId) ?? Promise.resolve();
+  const next = previous.then(fn, fn);
+  // Keep the chain alive even if this call rejects, so the *next* queued
+  // call still runs; and clear the entry once we're the last one queued so
+  // the map doesn't grow forever.
+  const settled = next.catch(() => {});
+  sessionQueues.set(sessionId, settled);
+  settled.then(() => {
+    if (sessionQueues.get(sessionId) === settled) sessionQueues.delete(sessionId);
+  });
+  return next;
 }
 
 async function cfFetch(path: string, body?: unknown) {
@@ -109,7 +143,9 @@ callsRouter.post("/tracks/push", async (req: AuthedRequest, res) => {
 
   try {
     await assertActiveParticipant(req.userId!, matchId);
-    const data = await cfFetch(`/sessions/${sessionId}/tracks/new`, { tracks, sessionDescription });
+    const data = await withSessionLock(sessionId, () =>
+      cfFetch(`/sessions/${sessionId}/tracks/new`, { tracks, sessionDescription })
+    );
     res.json(data);
   } catch (err) {
     respondToCallsError(res, err);
@@ -140,7 +176,10 @@ callsRouter.post("/tracks/pull", async (req: AuthedRequest, res) => {
 
   try {
     await assertActiveParticipant(req.userId!, matchId);
-    const data = await cfFetch(`/sessions/${sessionId}/tracks/new`, { tracks });
+    // Locked on the *caller's own* sessionId, same as push/renegotiate below
+    // -- pulling adds a remote track into this session, not the partner's,
+    // so it's this session's negotiation state that's at risk of racing.
+    const data = await withSessionLock(sessionId, () => cfFetch(`/sessions/${sessionId}/tracks/new`, { tracks }));
     res.json(data);
   } catch (err) {
     respondToCallsError(res, err);
@@ -160,19 +199,21 @@ callsRouter.put("/renegotiate", async (req: AuthedRequest, res) => {
 
   try {
     await assertActiveParticipant(req.userId!, matchId);
-    const response = await fetch(`${CALLS_BASE}/sessions/${sessionId}/renegotiate`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${env.CLOUDFLARE_CALLS_APP_SECRET}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ sessionDescription }),
+    await withSessionLock(sessionId, async () => {
+      const response = await fetch(`${CALLS_BASE}/sessions/${sessionId}/renegotiate`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${env.CLOUDFLARE_CALLS_APP_SECRET}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sessionDescription }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        logger.error({ status: response.status, data }, "cloudflare_calls_error");
+        throw new CloudflareCallsError(`cloudflare_calls_${response.status}`, response.status);
+      }
     });
-    if (!response.ok) {
-      const data = await response.json().catch(() => null);
-      logger.error({ status: response.status, data }, "cloudflare_calls_error");
-      throw new CloudflareCallsError(`cloudflare_calls_${response.status}`, response.status);
-    }
     res.json({ ok: true });
   } catch (err) {
     respondToCallsError(res, err);
