@@ -1,10 +1,11 @@
 import { Router } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import { env } from "../lib/env.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { requireNotBanned } from "../middleware/banGate.js";
 import { logger } from "../lib/logger.js";
 
-export const turnRouter = Router();
+export const turnRouter = wrapRouterAsync(Router());
 
 /**
  * Issues short-TTL Cloudflare TURN credentials for the caller. No public

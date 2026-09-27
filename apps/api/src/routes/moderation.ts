@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import { z } from "zod";
 import crypto from "node:crypto";
 import { env } from "../lib/env.js";
@@ -45,7 +46,7 @@ const webhookSchema = z.object({
   vendorRef: z.string().optional(),
 });
 
-export const moderationRouter = Router();
+export const moderationRouter = wrapRouterAsync(Router());
 
 function verifyWebhookSignature(rawBody: string, signature: string | undefined): boolean {
   if (!signature) return false;

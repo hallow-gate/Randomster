@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import { z } from "zod";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { requireNotBanned } from "../middleware/banGate.js";
@@ -8,7 +9,7 @@ import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { containsProfanity } from "../lib/profanity.js";
 import { logger } from "../lib/logger.js";
 
-export const chatRouter = Router();
+export const chatRouter = wrapRouterAsync(Router());
 chatRouter.use(requireAuth, requireNotBanned, messageLimiter);
 
 const sendSchema = z.object({

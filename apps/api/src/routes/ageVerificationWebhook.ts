@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { env } from "../lib/env.js";
@@ -15,7 +16,7 @@ const webhookSchema = z.object({
   result: z.enum(["verified", "rejected"]),
 });
 
-export const ageVerificationWebhookRouter = Router();
+export const ageVerificationWebhookRouter = wrapRouterAsync(Router());
 
 function verifySignature(rawBody: string, signature: string | undefined): boolean {
   if (!signature) return false;

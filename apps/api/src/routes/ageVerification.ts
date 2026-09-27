@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { logger } from "../lib/logger.js";
@@ -20,7 +21,7 @@ import { logger } from "../lib/logger.js";
  *      requireNotBanned + RLS (age_verification_status <> 'rejected' in
  *      profiles_public).
  */
-export const ageVerificationRouter = Router();
+export const ageVerificationRouter = wrapRouterAsync(Router());
 
 ageVerificationRouter.post("/start", requireAuth, async (req: AuthedRequest, res) => {
   const userId = req.userId!;

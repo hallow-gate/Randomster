@@ -1,4 +1,5 @@
 import { Router, type Response } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import { z } from "zod";
 import { env } from "../lib/env.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
@@ -21,7 +22,7 @@ import { logger } from "../lib/logger.js";
  * that check, a stranger could push tracks into or pull tracks out of
  * someone else's call.
  */
-export const callsRouter = Router();
+export const callsRouter = wrapRouterAsync(Router());
 callsRouter.use(requireAuth, requireNotBanned, callsSignalingLimiter);
 
 const CALLS_BASE = `https://rtc.live.cloudflare.com/v1/apps/${env.CLOUDFLARE_CALLS_APP_ID}`;

@@ -10,7 +10,7 @@ import { neonQuery } from "../lib/neonDb.js";
 import { containsProfanity } from "../lib/profanity.js";
 import { logger } from "../lib/logger.js";
 import { notifyCallEnded } from "../lib/realtime.js";
-import { asyncHandler } from "../lib/asyncHandler.js";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 
 /**
  * Live streaming: a broadcaster goes through the exact same random
@@ -32,28 +32,18 @@ import { asyncHandler } from "../lib/asyncHandler.js";
  * on `/end`, and an account ban if a report is high-priority — both of
  * those are account data, which is what Supabase is for.
  */
-export const liveRouter = Router();
-liveRouter.use(requireAuth, requireNotBanned);
-
-// Every route below is an `async` handler. Express 4 does not catch a
-// rejected promise from one — it becomes an unhandled rejection instead of
-// reaching the centralized error middleware in index.ts, which can crash
-// the entire process over a single bad request (this happened in
+// Every route below is an `async` handler (as is `requireAuth`/
+// `requireNotBanned`, wired in via `.use()` just below). Express 4 does not
+// catch a rejected promise from one — it becomes an unhandled rejection
+// instead of reaching the centralized error middleware in index.ts, which
+// can crash the entire process over a single bad request (this happened in
 // production: a query referencing a column that hadn't been migrated yet
 // took the whole API down instead of just failing that one request).
-// Wrapping every handler registered on *this* router closes that gap for
-// the whole file at once, including any route added here later, rather
-// than relying on each handler remembering to catch its own errors.
-for (const method of ["get", "post", "patch", "delete"] as const) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const original = (liveRouter[method] as any).bind(liveRouter);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (liveRouter as any)[method] = (path: string, ...handlers: unknown[]) =>
-    original(
-      path,
-      ...handlers.map((h) => (typeof h === "function" ? asyncHandler(h as Parameters<typeof asyncHandler>[0]) : h))
-    );
-}
+// `wrapRouterAsync` closes that gap for every handler registered on this
+// router from this point on, including routes added later, rather than
+// relying on each handler remembering to catch its own errors.
+export const liveRouter = wrapRouterAsync(Router());
+liveRouter.use(requireAuth, requireNotBanned);
 
 interface LiveSessionRow {
   id: string;

@@ -1,10 +1,11 @@
 import { Router } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
 import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { logger } from "../lib/logger.js";
 
-export const accountRouter = Router();
+export const accountRouter = wrapRouterAsync(Router());
 accountRouter.use(requireAuth);
 
 /** GDPR data export: everything tied to the user, excluding others' data. */

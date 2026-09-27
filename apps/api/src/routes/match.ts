@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wrapRouterAsync } from "../lib/asyncHandler.js";
 import { z } from "zod";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { requireNotBanned } from "../middleware/banGate.js";
@@ -8,7 +9,7 @@ import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { logger } from "../lib/logger.js";
 import { notifyUserMatched, notifyCallEnded } from "../lib/realtime.js";
 
-export const matchRouter = Router();
+export const matchRouter = wrapRouterAsync(Router());
 matchRouter.use(requireAuth, requireNotBanned, matchActionLimiter);
 
 const joinSchema = z.object({
