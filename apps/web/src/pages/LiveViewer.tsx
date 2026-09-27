@@ -130,7 +130,17 @@ export default function LiveViewer() {
             const withoutStaleEchoes = prev.filter(
               (c) => !(c.id.startsWith("local-") && confirmed.has(`${c.user_id}:${c.text}`))
             );
-            return [...withoutStaleEchoes, ...incoming].slice(-100);
+            // Belt-and-suspenders on top of the seq cursor itself: never
+            // let a comment `id` already in state get appended a second
+            // time, no matter why a duplicate showed up (a stale cursor
+            // from a tab that hasn't picked up a deploy yet, two polls
+            // landing out of order, a retried request, etc). This is the
+            // one place new comments enter state, so it's also the one
+            // place that needs to guarantee "no id twice" — every other
+            // source of duplication upstream of here becomes a non-issue.
+            const seen = new Set(withoutStaleEchoes.map((c) => c.id));
+            const fresh = incoming.filter((c) => !seen.has(c.id));
+            return [...withoutStaleEchoes, ...fresh].slice(-100);
           });
           lastCommentSeqRef.current = data.comments[data.comments.length - 1].seq;
         }

@@ -211,7 +211,19 @@ export default function LiveBroadcast() {
           setCommentsEnabled(data.commentsEnabled);
         }
         if (data.comments?.length) {
-          setComments((prev) => [...prev, ...data.comments].slice(-100));
+          // Belt-and-suspenders on top of the seq cursor itself: never let
+          // a comment `id` already in state get appended a second time,
+          // no matter why a duplicate showed up (a stale cursor from a tab
+          // that hasn't picked up a deploy yet, two polls landing out of
+          // order, a retried request, etc). This is the one place new
+          // comments enter state, so it's also the one place that needs to
+          // guarantee "no id twice" — every other source of duplication
+          // upstream of here becomes a non-issue.
+          setComments((prev) => {
+            const seen = new Set(prev.map((c) => c.id));
+            const fresh = (data.comments as LiveComment[]).filter((c) => !seen.has(c.id));
+            return [...prev, ...fresh].slice(-100);
+          });
           lastCommentSeqRef.current = data.comments[data.comments.length - 1].seq;
         }
       } catch {
