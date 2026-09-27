@@ -35,6 +35,8 @@ export default function LiveViewer() {
   const navigate = useNavigate();
 
   const [matchId, setMatchId] = useState<string | null>(null);
+  const [mode, setMode] = useState<"random" | "solo">("random");
+  const [caption, setCaption] = useState<string | null>(null);
   const [broadcasterUsername, setBroadcasterUsername] = useState<string | null>(null);
   const [partnerUsername, setPartnerUsername] = useState<string | null>(null);
   const [viewerCount, setViewerCount] = useState(0);
@@ -49,10 +51,18 @@ export default function LiveViewer() {
   const [reported, setReported] = useState(false);
   const lastCommentAtRef = useRef<string | null>(null);
 
-  const { callState, remoteStreams } = useLiveViewerCalls(id ?? null, matchId, !!matchId && !ended);
+  const active = !ended && (mode === "solo" || !!matchId);
+  const { callState, remoteStreams } = useLiveViewerCalls(id ?? null, matchId, mode, active);
   const primaryRef = useRef<HTMLVideoElement>(null);
   const secondaryRef = useRef<HTMLVideoElement>(null);
 
+  // Neither box here is ever the viewer's OWN camera — they're always
+  // someone else's stream (the broadcaster, or the broadcaster's
+  // stranger) — so unlike a self-preview, these are never mirrored. A
+  // mirror flip is a local display convention for looking at yourself; it
+  // has nothing to do with how the stream was actually captured, and
+  // applying it here just showed viewers a left-right-flipped version of
+  // someone they were never supposed to see mirrored in the first place.
   useEffect(() => {
     if (primaryRef.current) primaryRef.current.srcObject = remoteStreams[0] ?? null;
   }, [remoteStreams]);
@@ -68,6 +78,8 @@ export default function LiveViewer() {
       .then((data) => {
         if (cancelled) return;
         setMatchId(data.matchId);
+        setMode(data.mode ?? "random");
+        setCaption(data.caption ?? null);
         setBroadcasterUsername(data.broadcasterUsername);
         setPartnerUsername(data.partnerUsername);
         setViewerCount(data.viewerCount);
@@ -102,6 +114,7 @@ export default function LiveViewer() {
         setCommentsEnabled(data.commentsEnabled ?? true);
         setMatchId(data.matchId ?? null);
         setPartnerUsername(data.partnerUsername ?? null);
+        setCaption(data.caption ?? null);
         if (data.comments?.length) {
           setComments((prev) => [...prev, ...data.comments].slice(-100));
           lastCommentAtRef.current = data.comments[data.comments.length - 1].created_at;
@@ -169,9 +182,12 @@ export default function LiveViewer() {
           ← back
         </button>
 
-        <div className="flex items-center gap-2 font-mono text-xs text-gray-300 min-w-0 justify-center flex-1">
-          <span className="text-lime truncate">@{broadcasterUsername}</span>
-          {partnerUsername && <span className="text-gray-500 truncate">+ @{partnerUsername}</span>}
+        <div className="flex flex-col items-center min-w-0 flex-1 px-1">
+          <div className="flex items-center gap-2 font-mono text-xs text-gray-300 min-w-0 justify-center">
+            <span className="text-lime truncate">@{broadcasterUsername}</span>
+            {partnerUsername && <span className="text-gray-500 truncate">+ @{partnerUsername}</span>}
+          </div>
+          {caption && <p className="text-[10px] text-gray-400 truncate max-w-full">{caption}</p>}
         </div>
 
         <button
@@ -189,23 +205,25 @@ export default function LiveViewer() {
 
       <main className="flex-1 flex items-center justify-center p-3 sm:p-4 overflow-hidden">
         <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden">
-          <video ref={primaryRef} autoPlay playsInline className="w-full h-full object-cover -scale-x-100" />
-          {!matchId && (
+          <video ref={primaryRef} autoPlay playsInline className="w-full h-full object-cover" />
+          {mode === "random" && !matchId && (
             <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60 text-center px-4">
               @{broadcasterUsername} is looking for the next stranger...
             </div>
           )}
-          {matchId && callState !== "connected" && (
+          {callState !== "connected" && (mode === "solo" || matchId) && (
             <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60">
               connecting to stream...
             </div>
           )}
-          <video
-            ref={secondaryRef}
-            autoPlay
-            playsInline
-            className="absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 object-cover border-2 border-lime shadow-brutal-sm -scale-x-100"
-          />
+          {mode === "random" && (
+            <video
+              ref={secondaryRef}
+              autoPlay
+              playsInline
+              className="absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 object-cover border-2 border-lime shadow-brutal-sm"
+            />
+          )}
 
           <div className="absolute top-2 left-2 flex items-center gap-1 bg-magenta text-black text-[10px] font-display font-bold uppercase px-1.5 py-0.5 border border-black">
             ● Live

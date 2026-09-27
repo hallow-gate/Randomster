@@ -4,6 +4,7 @@ import { useAuthContext } from "../hooks/AuthProvider";
 import { useMatchmaking } from "../hooks/useMatchmaking";
 import { useLocalMedia } from "../hooks/useLocalMedia";
 import { useCloudflareCalls } from "../hooks/useCloudflareCalls";
+import { useSoloLiveBroadcast } from "../hooks/useSoloLiveBroadcast";
 import { useSoundEffects } from "../hooks/useSoundEffects";
 import { BrutalButton } from "../components/BrutalButton";
 import { TerminalLoader } from "../components/TerminalLoader";
@@ -11,6 +12,7 @@ import { ControlDock } from "../components/ControlDock";
 import { CommentsOverlay, type LiveComment } from "../components/CommentsOverlay";
 import { HeartReaction } from "../components/HeartReaction";
 import { ChatPanel } from "../components/ChatPanel";
+import { GoLiveSetup } from "../components/GoLiveSetup";
 import { supabase, apiBaseUrl } from "../lib/supabase";
 
 async function authedFetch(path: string, body?: unknown, method = "POST") {
@@ -26,38 +28,52 @@ async function authedFetch(path: string, body?: unknown, method = "POST") {
 }
 
 /**
- * Goes live: this is the exact same random-matchmaking + 1:1 Cloudflare
- * Calls flow as MatchScreen (see hooks/useMatchmaking, useCloudflareCalls),
- * including Skip/Next/Report/Block and mic/cam controls — the "random
- * friends" part of the app is unchanged. The only addition is that once
- * matched, the call is wrapped in a live_sessions row (Neon) so an
- * audience can watch, comment, and react, via routes/live.ts.
+ * Goes live one of two ways, chosen up front in <GoLiveSetup>:
+ *   - "random": the exact same random-matchmaking + 1:1 Cloudflare Calls
+ *     flow as MatchScreen (see hooks/useMatchmaking, useCloudflareCalls),
+ *     wrapped in a live_sessions row (Neon) so an audience can watch.
+ *   - "solo": just the host's own camera, published via
+ *     hooks/useSoloLiveBroadcast — no matchmaking, no partner, no
+ *     skip/next/report/block, and no private stranger-chat panel.
  *
- * Crucially, the LIVE STREAM and the CURRENT MATCH are two different
+ * For "random", the live stream and the current match are two different
  * lifetimes: hitting Next, or the stranger skipping/blocking/reporting the
  * host, ends the match but never the stream — the host's own camera stays
- * up (it never depended on having a remote peer) and the same live_session
- * (same comments, reactions, viewer count) just gets re-partnered once a
- * new match is found. Only the host's explicit "End Live" ends the stream.
+ * up and the same live_session (comments, reactions, viewer count) just
+ * gets re-partnered once a new match is found. Only "End Live" ends the
+ * stream itself, in either mode.
  */
 export default function LiveBroadcast() {
   const { session, profile } = useAuthContext();
   const selfId = session?.user.id;
   const navigate = useNavigate();
-  const { state, matchId, join, skip, next, report, block, resetAfterEnd } = useMatchmaking(selfId);
   const sound = useSoundEffects();
 
-  // The host's own camera has nothing to do with whether a stranger is
-  // currently connected — it's on for the whole time they're on this page,
-  // exactly like a real live host sees themselves before anyone joins.
+  const [mode, setMode] = useState<"random" | "solo" | null>(null);
+  const { state: matchState, matchId, join, skip, next, report, block, resetAfterEnd } = useMatchmaking(selfId);
+
+  // The host's own camera has nothing to do with which mode was chosen, or
+  // whether a stranger is currently connected — it's on for the whole time
+  // they're on this page, exactly like a real live host sees themselves
+  // before anyone joins.
   const { stream: localStream, micMuted, camOff, toggleMic, toggleCam, error: mediaError } = useLocalMedia(true);
-  const { callState, remoteStream } = useCloudflareCalls(matchId, localStream);
+
+  const [liveId, setLiveId] = useState<string | null>(null);
+
+  // Both call hooks are always instantiated (hooks can't be conditional),
+  // but only the one matching the chosen mode ever receives real
+  // arguments — the other is fed `null` and stays a no-op.
+  const { callState: randomCallState, remoteStream } = useCloudflareCalls(
+    mode === "random" ? matchId : null,
+    localStream
+  );
+  const { callState: soloCallState } = useSoloLiveBroadcast(mode === "solo" ? liveId : null, localStream);
+  const callState = mode === "solo" ? soloCallState : randomCallState;
 
   // Both video elements stay mounted for the whole lifetime of the page —
-  // they're never conditionally added/removed from the tree. Only *which
-  // stream* they show, and whether the PIP is visible, changes. This is
-  // what fixes the self-preview going blank: a `<video>` that gets
-  // unmounted and a fresh one mounted in its place (e.g. by swapping
+  // never conditionally added/removed from the tree. Only *which stream*
+  // they show, and whether the PIP is visible, changes. A `<video>` that
+  // gets unmounted and a fresh one mounted in its place (e.g. by swapping
   // between "big local view" and "small local PIP" in a ternary) never
   // gets `srcObject` re-applied unless the *stream itself* changes — and
   // the host's own camera stream doesn't change on Next/matched/unmatched,
@@ -70,12 +86,11 @@ export default function LiveBroadcast() {
   // Supabase reuses the same underlying channel object for two calls to
   // `supabase.channel(sameTopic)` -- so if a desktop chat panel and a
   // mobile chat drawer both rendered a <ChatPanel> for the same match at
-  // once (the desktop one merely hidden with CSS, but still mounted), the
-  // second one's `.subscribe()` call throws "tried to subscribe multiple
-  // times" and crashes the page. Tracking the viewport in JS instead of
-  // hiding-with-CSS means exactly one <ChatPanel> is ever mounted at a
-  // time -- as the sidebar on desktop, or in the drawer on mobile, never
-  // both.
+  // once (one merely hidden with CSS, but still mounted), the second one's
+  // `.subscribe()` call throws and crashes the page. Tracking the viewport
+  // in JS instead of hiding-with-CSS means exactly one <ChatPanel> is ever
+  // mounted at a time -- as the sidebar on desktop, or in the drawer on
+  // mobile, never both.
   const [isDesktop, setIsDesktop] = useState(
     () => typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches
   );
@@ -86,15 +101,34 @@ export default function LiveBroadcast() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  const [liveId, setLiveId] = useState<string | null>(null);
   const [viewerCount, setViewerCount] = useState(0);
   const [reactionCount, setReactionCount] = useState(0);
   const [comments, setComments] = useState<LiveComment[]>([]);
+
+  // Two SEPARATE toggles, both host-controlled but doing very different
+  // things (this used to be a single flag, which is why "hide/show
+  // comments" felt broken — toggling it changed both things you'd want
+  // independently):
+  //   - hostCommentsVisible: purely local, personal, never touches the
+  //     server. Just collapses the overlay on the HOST's own screen so it
+  //     doesn't clutter their view. Instant, never reverts, doesn't affect
+  //     viewers at all.
+  //   - commentsEnabled: the server-side, shared setting. Off means
+  //     viewers literally cannot submit a new comment (enforced in
+  //     routes/live.ts). The host can still see whatever comments already
+  //     came in (if hostCommentsVisible is on) even while this is off.
+  const [hostCommentsVisible, setHostCommentsVisible] = useState(true);
   const [commentsEnabled, setCommentsEnabled] = useState(true);
   const [commentsBusy, setCommentsBusy] = useState(false);
+  const lastCommentsToggleAtRef = useRef<number>(0);
+
+  const [caption, setCaption] = useState("");
+  const [captionDraft, setCaptionDraft] = useState("");
+  const [editingCaption, setEditingCaption] = useState(false);
+  const [captionSaving, setCaptionSaving] = useState(false);
+
   const [chatOpen, setChatOpen] = useState(false);
   const lastCommentAtRef = useRef<string | null>(null);
-  const lastCommentsToggleAtRef = useRef<number>(0);
   const liveIdRef = useRef<string | null>(null);
   const startedMatchIdRef = useRef<string | null>(null);
   const endingRef = useRef(false);
@@ -103,8 +137,9 @@ export default function LiveBroadcast() {
     liveIdRef.current = liveId;
   }, [liveId]);
 
-  // Main box: show the stranger once connected, otherwise fall back to the
-  // host's own camera so the box is never empty while waiting/searching.
+  // Main box: show the stranger once connected (random mode only),
+  // otherwise fall back to the host's own camera so the box is never empty
+  // while waiting/searching, or for the whole duration of a solo stream.
   useEffect(() => {
     if (mainVideoRef.current) mainVideoRef.current.srcObject = remoteStream ?? localStream ?? null;
   }, [remoteStream, localStream]);
@@ -117,10 +152,10 @@ export default function LiveBroadcast() {
   }, [localStream]);
 
   useEffect(() => {
-    if (state === "matched") sound.play("connect");
-    if (state === "ended") sound.play("disconnect");
+    if (mode === "random" && matchState === "matched") sound.play("connect");
+    if (mode === "random" && matchState === "ended") sound.play("disconnect");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
+  }, [mode, matchState]);
 
   const clearPartner = useCallback(async () => {
     if (!liveIdRef.current) return;
@@ -128,24 +163,26 @@ export default function LiveBroadcast() {
     startedMatchIdRef.current = null;
   }, []);
 
-  // Start (or re-partner) the live session whenever we land on a fresh match.
+  // Random mode: start (or re-partner) the live session whenever we land
+  // on a fresh match.
   useEffect(() => {
-    if (state === "matched" && matchId && startedMatchIdRef.current !== matchId) {
+    if (mode === "random" && matchState === "matched" && matchId && startedMatchIdRef.current !== matchId) {
       startedMatchIdRef.current = matchId;
-      authedFetch("/api/live/start", { matchId })
+      authedFetch("/api/live/start", { matchId, mode: "random", caption })
         .then((data) => setLiveId(data.id))
         .catch(() => {
           startedMatchIdRef.current = null;
         });
     }
-  }, [state, matchId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, matchState, matchId]);
 
-  // The stranger left (skip/block/report/moderation) — clear the stale
-  // partner so viewers see "waiting for next stranger" instead of a frozen
-  // video, then automatically go straight back into the queue. The stream
-  // itself is untouched.
+  // Random mode: the stranger left (skip/block/report/moderation) — clear
+  // the stale partner so viewers see "waiting for next stranger" instead
+  // of a frozen video, then automatically go straight back into the queue.
+  // The stream itself is untouched.
   useEffect(() => {
-    if (state !== "ended" || endingRef.current || !profile) return;
+    if (mode !== "random" || matchState !== "ended" || endingRef.current || !profile) return;
     setChatOpen(false);
     (async () => {
       await clearPartner();
@@ -153,10 +190,11 @@ export default function LiveBroadcast() {
       join(profile.match_scope);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
+  }, [mode, matchState]);
 
-  // Poll for viewer count / reaction total / new comments / re-partner info
-  // while live, independent of whether a stranger is currently connected.
+  // Poll for viewer count / reaction total / new comments / re-partner
+  // info while live, independent of mode or whether a stranger is
+  // currently connected.
   useEffect(() => {
     if (!liveId) return;
     let cancelled = false;
@@ -167,8 +205,8 @@ export default function LiveBroadcast() {
         if (cancelled || data.ended) return;
         setViewerCount(data.viewerCount);
         setReactionCount(data.reactionCount);
-        // See toggleComments() -- don't let a poll that raced a fresh local
-        // toggle stomp it with a stale server value.
+        // See toggleComments() below -- don't let a poll that raced a
+        // fresh local toggle stomp it with a stale server value.
         if (Date.now() - lastCommentsToggleAtRef.current > 4000) {
           setCommentsEnabled(data.commentsEnabled);
         }
@@ -188,8 +226,8 @@ export default function LiveBroadcast() {
     };
   }, [liveId]);
 
-  // Leave the live session if the host just closes the tab / navigates away
-  // without pressing "End Live".
+  // Leave the live session if the host just closes the tab / navigates
+  // away without pressing "End Live".
   useEffect(() => {
     return () => {
       if (liveIdRef.current) authedFetch(`/api/live/${liveIdRef.current}/end`).catch(() => {});
@@ -198,9 +236,21 @@ export default function LiveBroadcast() {
 
   if (!session || !profile) return null;
 
-  const handleStart = () => {
+  const handleSetupConfirm = async (chosenMode: "random" | "solo", chosenCaption: string) => {
     sound.play("click");
-    join(profile.match_scope);
+    setMode(chosenMode);
+    setCaption(chosenCaption);
+    setCaptionDraft(chosenCaption);
+    if (chosenMode === "random") {
+      join(profile.match_scope);
+    } else {
+      try {
+        const data = await authedFetch("/api/live/start", { mode: "solo", caption: chosenCaption });
+        setLiveId(data.id);
+      } catch {
+        setMode(null); // let them retry the setup screen
+      }
+    }
   };
 
   const handleSkip = async () => {
@@ -228,15 +278,6 @@ export default function LiveBroadcast() {
     const enabled = !commentsEnabled;
     setCommentsBusy(true);
     setCommentsEnabled(enabled);
-    // The background poll (every 3s) also writes `commentsEnabled` from the
-    // server's last-known value. Without this guard, a poll that was
-    // already in flight when you clicked -- or one that lands in the small
-    // window before this PATCH's write is visible to it -- would echo the
-    // *old* value straight back and the toggle would appear to "undo
-    // itself". Recording when we last changed it locally lets the poll
-    // handler (below) ignore the server value for a few seconds and trust
-    // this optimistic one instead, then resync automatically once that
-    // window passes.
     lastCommentsToggleAtRef.current = Date.now();
     try {
       const result = await authedFetch(`/api/live/${liveId}/comments-enabled`, { enabled }, "PATCH");
@@ -248,16 +289,31 @@ export default function LiveBroadcast() {
     }
   };
 
+  const saveCaption = async () => {
+    if (!liveId) return;
+    const trimmed = captionDraft.trim();
+    setCaptionSaving(true);
+    try {
+      const result = await authedFetch(`/api/live/${liveId}/caption`, { caption: trimmed || null }, "PATCH");
+      setCaption(result.caption ?? "");
+      setEditingCaption(false);
+    } catch {
+      // leave the editor open so they can retry
+    } finally {
+      setCaptionSaving(false);
+    }
+  };
+
   const handleEndLive = async () => {
     endingRef.current = true;
     if (liveId) await authedFetch(`/api/live/${liveId}/end`).catch(() => {});
-    if (matchId) await skip().catch(() => {});
+    if (mode === "random" && matchId) await skip().catch(() => {});
     navigate("/live");
   };
 
-  const searching = state === "queued";
-  const showingStranger = !!remoteStream;
-  const chatAvailable = state === "matched" && !!matchId && !!selfId;
+  const searching = mode === "random" && matchState === "queued";
+  const showingStranger = mode === "random" && !!remoteStream;
+  const chatAvailable = mode === "random" && matchState === "matched" && !!matchId && !!selfId;
 
   return (
     <div className="h-dvh flex flex-col overflow-hidden bg-charcoal text-white">
@@ -275,7 +331,11 @@ export default function LiveBroadcast() {
             </span>
             Live
           </span>
-          <h1 className="font-display font-bold text-lime text-sm truncate hidden sm:block">GO LIVE</h1>
+          {mode && (
+            <span className="font-mono text-[10px] text-gray-400 border border-gray-600 px-1.5 py-1 hidden sm:inline">
+              {mode === "solo" ? "🎥 solo" : "🎲 random"}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -286,9 +346,22 @@ export default function LiveBroadcast() {
           )}
           {liveId && (
             <button
+              onClick={() => setHostCommentsVisible((v) => !v)}
+              title={hostCommentsVisible ? "Hide comments from your own view" : "Show comments on your own view"}
+              className={`font-mono text-[11px] px-2 py-1 border transition-colors ${
+                hostCommentsVisible
+                  ? "text-lime border-lime/40 hover:bg-lime/10"
+                  : "text-gray-400 border-gray-600 hover:bg-white/5"
+              }`}
+            >
+              {hostCommentsVisible ? "👁 Shown" : "👁 Hidden"}
+            </button>
+          )}
+          {liveId && (
+            <button
               onClick={toggleComments}
               disabled={commentsBusy}
-              title={commentsEnabled ? "Hide comments from viewers" : "Show comments to viewers"}
+              title={commentsEnabled ? "Viewers can comment — tap to turn off" : "Viewers can't comment — tap to turn on"}
               className={`font-mono text-[11px] px-2 py-1 border transition-colors disabled:opacity-50 ${
                 commentsEnabled
                   ? "text-cyan border-cyan/40 hover:bg-cyan/10"
@@ -321,17 +394,19 @@ export default function LiveBroadcast() {
       </header>
 
       {/* ---------------------------------------------------------------- */}
-      {/* Body: video + controls in the main column; on md+ screens the    */}
-      {/* private stranger-chat gets its own permanent side panel (same     */}
-      {/* idea as MatchScreen) instead of competing for space over the     */}
-      {/* video with the public viewer comments.                           */}
+      {/* Body: video + controls in the main column; on md+ screens random */}
+      {/* mode's private stranger-chat gets its own permanent side panel    */}
+      {/* (same idea as MatchScreen) instead of competing for space over   */}
+      {/* the video with the public viewer comments.                      */}
       {/* ---------------------------------------------------------------- */}
       <main className="flex-1 flex flex-col md:flex-row gap-4 p-3 sm:p-4 overflow-hidden min-h-0">
         <div className="flex flex-col items-center gap-3 min-h-0 flex-1 overflow-y-auto md:overflow-hidden">
           <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden shrink-0">
-            {/* Main box: stranger when connected, otherwise the host's own
-                camera — a single element whose srcObject is re-pointed,
-                never swapped for a different DOM node. */}
+            {!mode && <GoLiveSetup onConfirm={handleSetupConfirm} />}
+
+            {/* Main box: stranger when connected (random mode), otherwise
+                the host's own camera — a single element whose srcObject is
+                re-pointed, never swapped for a different DOM node. */}
             <video
               ref={mainVideoRef}
               autoPlay
@@ -341,7 +416,8 @@ export default function LiveBroadcast() {
             />
 
             {/* Self PIP: always mounted, shown only once a stranger takes
-                over the main box. */}
+                over the main box (random mode only — solo has no PIP,
+                since the main box is already the host). */}
             <video
               ref={pipVideoRef}
               autoPlay
@@ -352,12 +428,17 @@ export default function LiveBroadcast() {
               }`}
             />
 
-            {!localStream && !remoteStream && (
+            {mode && !localStream && !remoteStream && (
               <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm font-mono">
                 starting camera...
               </div>
             )}
-            {state === "matched" && !remoteStream && callState === "connecting" && (
+            {mode === "solo" && liveId && callState === "connecting" && (
+              <div className="absolute inset-x-0 bottom-0 bg-black/70 text-cyan text-xs font-mono text-center py-1">
+                going live...
+              </div>
+            )}
+            {mode === "random" && matchState === "matched" && !remoteStream && callState === "connecting" && (
               <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60">
                 connecting stranger...
               </div>
@@ -368,16 +449,57 @@ export default function LiveBroadcast() {
               </div>
             )}
 
-            <div className="absolute top-2 left-2 flex items-center gap-1 bg-magenta text-black text-[10px] font-display font-bold uppercase px-1.5 py-0.5 border border-black">
-              ● Live
-            </div>
+            {mode && (
+              <div className="absolute top-2 left-2 flex items-center gap-1 bg-magenta text-black text-[10px] font-display font-bold uppercase px-1.5 py-0.5 border border-black">
+                ● Live
+              </div>
+            )}
+
+            {/* Caption, host-editable in place. */}
+            {liveId && !editingCaption && (
+              <button
+                onClick={() => {
+                  setCaptionDraft(caption);
+                  setEditingCaption(true);
+                }}
+                className="absolute top-2 right-2 max-w-[55%] text-[10px] font-mono text-white bg-black/60 px-2 py-1 text-right truncate hover:bg-black/80"
+                title="Edit caption"
+              >
+                {caption ? caption : "+ add caption"}
+              </button>
+            )}
+            {liveId && editingCaption && (
+              <div className="absolute top-2 right-2 left-2 flex gap-1 bg-black/85 p-1.5 border border-cyan">
+                <input
+                  autoFocus
+                  value={captionDraft}
+                  onChange={(e) => setCaptionDraft(e.target.value.slice(0, 200))}
+                  onKeyDown={(e) => e.key === "Enter" && saveCaption()}
+                  placeholder="Add a caption..."
+                  className="flex-1 bg-transparent text-white text-[11px] font-mono outline-none placeholder:text-gray-500"
+                />
+                <button
+                  onClick={saveCaption}
+                  disabled={captionSaving}
+                  className="text-[10px] font-mono text-black bg-lime px-2 disabled:opacity-50"
+                >
+                  save
+                </button>
+                <button
+                  onClick={() => setEditingCaption(false)}
+                  className="text-[10px] font-mono text-gray-300 px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {liveId &&
-              (commentsEnabled ? (
+              (hostCommentsVisible ? (
                 <CommentsOverlay comments={comments} onSend={() => {}} disabled />
               ) : (
                 <div className="absolute left-2 bottom-3 text-[10px] font-mono text-gray-400 bg-black/60 px-2 py-1">
-                  comments hidden from viewers
+                  comments hidden from your view
                 </div>
               ))}
 
@@ -390,22 +512,13 @@ export default function LiveBroadcast() {
 
           {mediaError && <p className="text-magenta text-xs shrink-0">Camera/mic error: {mediaError}</p>}
 
-          {state === "idle" && (
-            <div className="flex flex-col items-center gap-3 shrink-0">
-              <p className="text-xs text-gray-400 font-mono max-w-xs text-center">
-                You'll be paired with a random stranger, and your call goes on the live feed for others to watch.
-              </p>
-              <BrutalButton onClick={handleStart}>Start Live</BrutalButton>
-            </div>
-          )}
-
-          {state === "queued" && (
+          {mode === "random" && matchState === "queued" && (
             <div className="shrink-0">
               <TerminalLoader countryCode={profile.country_code} />
             </div>
           )}
 
-          {state === "matched" && matchId && (
+          {mode === "random" && matchState === "matched" && matchId && (
             <div className="w-full max-w-md shrink-0">
               <ControlDock
                 onSkip={handleSkip}
@@ -421,13 +534,42 @@ export default function LiveBroadcast() {
               />
             </div>
           )}
+
+          {mode === "solo" && liveId && (
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                onClick={toggleMic}
+                className={`w-11 h-11 flex items-center justify-center border-2 border-black shadow-brutal-sm text-lg ${
+                  micMuted ? "bg-red-400" : "bg-cyan"
+                }`}
+              >
+                {micMuted ? "🔇" : "🎙"}
+              </button>
+              <button
+                onClick={toggleCam}
+                className={`w-11 h-11 flex items-center justify-center border-2 border-black shadow-brutal-sm text-lg ${
+                  camOff ? "bg-red-400" : "bg-cyan"
+                }`}
+              >
+                {camOff ? "📷" : "📹"}
+              </button>
+              <button
+                onClick={sound.toggleMuted}
+                className={`w-11 h-11 flex items-center justify-center border-2 border-black shadow-brutal-sm text-lg ${
+                  sound.muted ? "bg-red-400" : "bg-cyan"
+                }`}
+              >
+                {sound.muted ? "🔈" : "🔊"}
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Desktop chat side panel — permanently visible once matched,
-            exactly mirroring MatchScreen's layout so the host can talk to
-            the stranger while the stream keeps running. Only rendered on
-            desktop (see isDesktop above) so it's never mounted alongside
-            the mobile drawer's own <ChatPanel> for the same match. */}
+        {/* Desktop chat side panel (random mode only) — permanently
+            visible once matched, mirroring MatchScreen's layout. Only
+            rendered on desktop (see isDesktop above) so it's never mounted
+            alongside the mobile drawer's own <ChatPanel> for the same
+            match. */}
         {chatAvailable && isDesktop && (
           <div className="flex flex-col md:w-80 md:h-full min-h-0 gap-2">
             <p className="text-[11px] font-mono text-lime uppercase shrink-0">chat with stranger</p>
@@ -438,9 +580,9 @@ export default function LiveBroadcast() {
         )}
       </main>
 
-      {/* Mobile chat drawer — same ChatPanel, slid up from the bottom so it
-          never has to share screen space with the video while closed.
-          Only rendered when NOT on desktop, for the same reason as above. */}
+      {/* Mobile chat drawer (random mode only) — same ChatPanel, slid up
+          from the bottom. Only rendered when NOT on desktop, for the same
+          reason as above. */}
       {chatAvailable && !isDesktop && chatOpen && (
         <div
           className="md:hidden fixed inset-0 z-50 bg-black/70 flex flex-col justify-end"
