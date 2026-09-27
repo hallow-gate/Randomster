@@ -37,62 +37,69 @@ export function GoLiveSetup({ onConfirm }: GoLiveSetupProps) {
   const [caption, setCaption] = useState("");
 
   return (
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 bg-charcoal/95 backdrop-blur-sm px-4 py-6 text-center animate-[setupIn_0.25s_ease-out]">
-      <div>
-        <p className="font-display font-bold text-lime text-lg uppercase tracking-wide">Go Live</p>
-        <p className="text-gray-400 text-xs font-mono mt-1">Choose how you want to stream</p>
-      </div>
+    <div className="fixed inset-0 z-50 flex flex-col items-center bg-charcoal/95 backdrop-blur-sm px-4 py-6 overflow-y-auto text-center">
+      {/* `m-auto` (not `justify-center` on the scroll container) centers this
+          when it's shorter than the viewport but — unlike `justify-center`,
+          which clips the top of a taller-than-viewport flex child instead of
+          letting you scroll to it — still lets every field and the Go Live
+          button itself scroll fully into view on short/landscape screens. */}
+      <div className="m-auto flex flex-col items-center gap-5 w-full animate-[setupIn_0.25s_ease-out]">
+        <div>
+          <p className="font-display font-bold text-lime text-lg uppercase tracking-wide">Go Live</p>
+          <p className="text-gray-400 text-xs font-mono mt-1">Choose how you want to stream</p>
+        </div>
 
-      <div className="grid grid-cols-2 gap-3 w-full max-w-sm" role="radiogroup" aria-label="Stream mode">
-        {MODES.map((m) => {
-          const selected = mode === m.value;
-          return (
-            <button
-              key={m.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => setMode(m.value)}
-              className={`relative flex flex-col items-center gap-2 px-3 py-4 border-2 transition-all duration-150 hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-charcoal ${m.ring} ${
-                selected ? m.selectedClass : m.idleClass
-              }`}
-            >
-              {selected && (
-                <span className="absolute top-1 right-1 w-4 h-4 flex items-center justify-center rounded-full bg-black text-white text-[10px] leading-none">
-                  ✓
+        <div className="grid grid-cols-2 gap-3 w-full max-w-sm" role="radiogroup" aria-label="Stream mode">
+          {MODES.map((m) => {
+            const selected = mode === m.value;
+            return (
+              <button
+                key={m.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setMode(m.value)}
+                className={`relative flex flex-col items-center gap-2 px-3 py-4 border-2 transition-all duration-150 hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-charcoal ${m.ring} ${
+                  selected ? m.selectedClass : m.idleClass
+                }`}
+              >
+                {selected && (
+                  <span className="absolute top-1 right-1 w-4 h-4 flex items-center justify-center rounded-full bg-black text-white text-[10px] leading-none">
+                    ✓
+                  </span>
+                )}
+                <span className={`text-2xl transition-transform duration-150 ${selected ? "scale-110" : ""}`}>
+                  {m.emoji}
                 </span>
-              )}
-              <span className={`text-2xl transition-transform duration-150 ${selected ? "scale-110" : ""}`}>
-                {m.emoji}
-              </span>
-              <span className="font-display font-bold text-xs uppercase">{m.label}</span>
-              <span className="text-[10px] font-mono opacity-80">{m.blurb}</span>
-            </button>
-          );
-        })}
-      </div>
+                <span className="font-display font-bold text-xs uppercase">{m.label}</span>
+                <span className="text-[10px] font-mono opacity-80">{m.blurb}</span>
+              </button>
+            );
+          })}
+        </div>
 
-      <div className="w-full max-w-sm text-left">
-        <label htmlFor="go-live-caption" className="sr-only">
-          Caption
-        </label>
-        <input
-          id="go-live-caption"
-          value={caption}
-          onChange={(e) => setCaption(e.target.value.slice(0, 200))}
-          placeholder="Add a caption (optional)"
-          className="w-full bg-black/50 border-2 border-cyan/40 focus:border-cyan text-white text-sm font-mono px-3 py-2 outline-none placeholder:text-gray-500 transition-colors"
-        />
-        <p className="text-[10px] text-gray-500 font-mono mt-1 text-right">{caption.length}/200</p>
-      </div>
+        <div className="w-full max-w-sm text-left">
+          <label htmlFor="go-live-caption" className="sr-only">
+            Caption
+          </label>
+          <input
+            id="go-live-caption"
+            value={caption}
+            onChange={(e) => setCaption(e.target.value.slice(0, 200))}
+            placeholder="Add a caption (optional)"
+            className="w-full bg-black/50 border-2 border-cyan/40 focus:border-cyan text-white text-sm font-mono px-3 py-2 outline-none placeholder:text-gray-500 transition-colors"
+          />
+          <p className="text-[10px] text-gray-500 font-mono mt-1 text-right">{caption.length}/200</p>
+        </div>
 
-      <button
-        onClick={() => mode && onConfirm(mode, caption.trim())}
-        disabled={!mode}
-        className="font-display font-bold uppercase text-sm px-6 py-2.5 bg-lime text-black border-2 border-black shadow-brutal-sm disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-0.5 active:translate-y-0 active:shadow-none transition-transform disabled:hover:translate-y-0"
-      >
-        {mode ? `Go Live · ${mode === "solo" ? "Solo" : "Random"}` : "Pick a mode to continue"}
-      </button>
+        <button
+          onClick={() => mode && onConfirm(mode, caption.trim())}
+          disabled={!mode}
+          className="font-display font-bold uppercase text-sm px-6 py-2.5 bg-lime text-black border-2 border-black shadow-brutal-sm disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-0.5 active:translate-y-0 active:shadow-none transition-transform disabled:hover:translate-y-0 shrink-0"
+        >
+          {mode ? `Go Live · ${mode === "solo" ? "Solo" : "Random"}` : "Pick a mode to continue"}
+        </button>
+      </div>
 
       <style>{`
         @keyframes setupIn {
