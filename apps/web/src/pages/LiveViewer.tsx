@@ -219,8 +219,8 @@ export default function LiveViewer() {
         </button>
       </header>
 
-      <main className="flex-1 flex items-center justify-center p-3 sm:p-4 overflow-hidden">
-        <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden">
+      <main className="flex-1 flex items-center justify-center p-3 sm:p-4 overflow-hidden min-h-0">
+        <div className="relative w-full h-full max-w-md bg-black border-2 border-magenta shadow-brutal overflow-hidden">
           <video ref={primaryRef} autoPlay playsInline className="w-full h-full object-cover -scale-x-100" />
           {mode === "random" && !matchId && (
             <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60 text-center px-4">

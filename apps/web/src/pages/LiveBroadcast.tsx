@@ -407,7 +407,7 @@ export default function LiveBroadcast() {
       {/* ---------------------------------------------------------------- */}
       <main className="flex-1 flex flex-col md:flex-row gap-4 p-3 sm:p-4 overflow-hidden min-h-0">
         <div className="flex flex-col items-center gap-3 min-h-0 flex-1 overflow-y-auto md:overflow-hidden">
-          <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden shrink-0">
+          <div className="relative w-full max-w-md flex-1 min-h-0 bg-black border-2 border-magenta shadow-brutal overflow-hidden">
             {!mode && <GoLiveSetup onConfirm={handleSetupConfirm} />}
 
             {/* Main box: stranger when connected (random mode), otherwise
