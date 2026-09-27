@@ -49,6 +49,7 @@ export default function LiveViewer() {
   const [viewers, setViewers] = useState<{ user_id: string; username: string }[]>([]);
   const [reportOpen, setReportOpen] = useState(false);
   const [reported, setReported] = useState(false);
+  const [commentBlocked, setCommentBlocked] = useState(false);
   const lastCommentAtRef = useRef<string | null>(null);
 
   const active = !ended && (mode === "solo" || !!matchId);
@@ -58,11 +59,14 @@ export default function LiveViewer() {
 
   // Neither box here is ever the viewer's OWN camera — they're always
   // someone else's stream (the broadcaster, or the broadcaster's
-  // stranger) — so unlike a self-preview, these are never mirrored. A
-  // mirror flip is a local display convention for looking at yourself; it
-  // has nothing to do with how the stream was actually captured, and
-  // applying it here just showed viewers a left-right-flipped version of
-  // someone they were never supposed to see mirrored in the first place.
+  // stranger). We still mirror them (-scale-x-100), on purpose: the
+  // broadcaster's own self-preview (LiveBroadcast) is mirrored, so if we
+  // showed viewers the natural, un-mirrored feed instead, a viewer would
+  // see the broadcaster flipped left-right relative to what the
+  // broadcaster sees in their own preview — e.g. raising their right hand
+  // looks, to the broadcaster, like their left. Mirroring here keeps the
+  // viewer's view consistent with the broadcaster's own, which is what
+  // people actually mean when they say a stream "looks mirrored" or not.
   useEffect(() => {
     if (primaryRef.current) primaryRef.current.srcObject = remoteStreams[0] ?? null;
   }, [remoteStreams]);
@@ -137,14 +141,26 @@ export default function LiveViewer() {
     setViewers(data.viewers);
   };
 
-  const sendComment = (text: string) => {
+  const sendComment = async (text: string) => {
     if (!id) return;
-    authedFetch(`/api/live/${id}/comment`, { text }).catch(() => {});
-    // Optimistic echo — the poll will dedupe naturally since it only fetches "after" the last seen timestamp.
-    setComments((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), user_id: session!.user.id, username: "you", text, created_at: new Date().toISOString() },
-    ]);
+    try {
+      await authedFetch(`/api/live/${id}/comment`, { text });
+      // Optimistic echo — but only *after* the server actually accepted it.
+      // Echoing unconditionally (the old behavior) meant a viewer whose
+      // comment was rejected server-side — comments turned off mid-flight,
+      // profanity filter, rate limit — still saw it appear on their own
+      // screen as if it had gone through, even though the host and every
+      // other viewer never received it at all. That's what made "turn
+      // comments off" look broken: it *was* blocking comments, just
+      // invisibly, only for the one person still typing.
+      setComments((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), user_id: session!.user.id, username: "you", text, created_at: new Date().toISOString() },
+      ]);
+    } catch {
+      setCommentBlocked(true);
+      window.setTimeout(() => setCommentBlocked(false), 2500);
+    }
   };
 
   const react = () => {
@@ -205,7 +221,7 @@ export default function LiveViewer() {
 
       <main className="flex-1 flex items-center justify-center p-3 sm:p-4 overflow-hidden">
         <div className="relative w-full max-w-md aspect-video bg-black border-2 border-magenta shadow-brutal overflow-hidden">
-          <video ref={primaryRef} autoPlay playsInline className="w-full h-full object-cover" />
+          <video ref={primaryRef} autoPlay playsInline className="w-full h-full object-cover -scale-x-100" />
           {mode === "random" && !matchId && (
             <div className="absolute inset-0 flex items-center justify-center text-cyan text-sm font-mono bg-black/60 text-center px-4">
               @{broadcasterUsername} is looking for the next stranger...
@@ -221,7 +237,7 @@ export default function LiveViewer() {
               ref={secondaryRef}
               autoPlay
               playsInline
-              className="absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 object-cover border-2 border-lime shadow-brutal-sm"
+              className="absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 object-cover border-2 border-lime shadow-brutal-sm -scale-x-100"
             />
           )}
 
@@ -234,6 +250,11 @@ export default function LiveViewer() {
           ) : (
             <div className="absolute left-2 bottom-16 text-[10px] font-mono text-gray-400 bg-black/60 px-2 py-1 flex items-center gap-1">
               <span>🚫</span> comments are off
+            </div>
+          )}
+          {commentBlocked && (
+            <div className="absolute left-2 bottom-16 text-[10px] font-mono text-black bg-amber-300 px-2 py-1 border border-black animate-[commentIn_0.2s_ease-out]">
+              comment didn't send — comments may be off
             </div>
           )}
 

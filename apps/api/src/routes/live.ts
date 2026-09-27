@@ -370,14 +370,26 @@ liveRouter.get("/:id/state", liveActionLimiter, async (req: AuthedRequest, res) 
     ]);
   }
 
-  const after = typeof req.query.after === "string" ? req.query.after : null;
-  const comments =
-    session.comments_enabled && after
-      ? await neonQuery(
-          "select id, user_id, username, text, created_at from live_comments where session_id = $1 and created_at > $2 order by created_at asc limit 50",
-          [session.id, after]
-        )
-      : [];
+  // `after` lets the poller ask for "just what's new since I last checked".
+  // The host's very first poll (and a viewer's first poll, if they joined
+  // before any comments existed yet) has no `after` yet — there's nothing
+  // to compare against. That used to make comments_enabled && after fail
+  // and return an empty array *every single poll*, forever, because the
+  // client only ever sets its "last seen" timestamp from a non-empty
+  // comments response — which this endpoint would never give it. The host
+  // in particular never calls /join (only /start), so it had no other way
+  // to seed that timestamp: hosts silently never received a single
+  // comment, no matter how long the stream ran or how many came in.
+  // Defaulting a missing `after` to the epoch fixes this — first poll
+  // returns everything so far, every poll after that is a normal
+  // incremental fetch.
+  const after = typeof req.query.after === "string" ? req.query.after : "1970-01-01T00:00:00.000Z";
+  const comments = session.comments_enabled
+    ? await neonQuery(
+        "select id, user_id, username, text, created_at from live_comments where session_id = $1 and created_at > $2 order by created_at asc limit 50",
+        [session.id, after]
+      )
+    : [];
   const viewerCount = await getViewerCount(session.id);
 
   res.json({

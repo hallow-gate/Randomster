@@ -412,13 +412,18 @@ export default function LiveBroadcast() {
 
             {/* Main box: stranger when connected (random mode), otherwise
                 the host's own camera — a single element whose srcObject is
-                re-pointed, never swapped for a different DOM node. */}
+                re-pointed, never swapped for a different DOM node. Always
+                mirrored (-scale-x-100), same convention as MatchScreen: the
+                host's own camera is mirrored for a natural self-view, and
+                the stranger's video is mirrored too so the host sees
+                *exactly* what their viewers see (see LiveViewer below) —
+                not a flipped version of it. */}
             <video
               ref={mainVideoRef}
               autoPlay
               playsInline
               muted={!showingStranger}
-              className={`w-full h-full object-cover ${showingStranger ? "" : "-scale-x-100"}`}
+              className="w-full h-full object-cover -scale-x-100"
             />
 
             {/* Self PIP: always mounted, shown only once a stranger takes
