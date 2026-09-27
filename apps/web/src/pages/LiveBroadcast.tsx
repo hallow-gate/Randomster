@@ -67,6 +67,25 @@ export default function LiveBroadcast() {
   const mainVideoRef = useRef<HTMLVideoElement>(null);
   const pipVideoRef = useRef<HTMLVideoElement>(null);
 
+  // Supabase reuses the same underlying channel object for two calls to
+  // `supabase.channel(sameTopic)` -- so if a desktop chat panel and a
+  // mobile chat drawer both rendered a <ChatPanel> for the same match at
+  // once (the desktop one merely hidden with CSS, but still mounted), the
+  // second one's `.subscribe()` call throws "tried to subscribe multiple
+  // times" and crashes the page. Tracking the viewport in JS instead of
+  // hiding-with-CSS means exactly one <ChatPanel> is ever mounted at a
+  // time -- as the sidebar on desktop, or in the drawer on mobile, never
+  // both.
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
   const [liveId, setLiveId] = useState<string | null>(null);
   const [viewerCount, setViewerCount] = useState(0);
   const [reactionCount, setReactionCount] = useState(0);
@@ -75,6 +94,7 @@ export default function LiveBroadcast() {
   const [commentsBusy, setCommentsBusy] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const lastCommentAtRef = useRef<string | null>(null);
+  const lastCommentsToggleAtRef = useRef<number>(0);
   const liveIdRef = useRef<string | null>(null);
   const startedMatchIdRef = useRef<string | null>(null);
   const endingRef = useRef(false);
@@ -147,7 +167,11 @@ export default function LiveBroadcast() {
         if (cancelled || data.ended) return;
         setViewerCount(data.viewerCount);
         setReactionCount(data.reactionCount);
-        setCommentsEnabled(data.commentsEnabled);
+        // See toggleComments() -- don't let a poll that raced a fresh local
+        // toggle stomp it with a stale server value.
+        if (Date.now() - lastCommentsToggleAtRef.current > 4000) {
+          setCommentsEnabled(data.commentsEnabled);
+        }
         if (data.comments?.length) {
           setComments((prev) => [...prev, ...data.comments].slice(-100));
           lastCommentAtRef.current = data.comments[data.comments.length - 1].created_at;
@@ -204,8 +228,19 @@ export default function LiveBroadcast() {
     const enabled = !commentsEnabled;
     setCommentsBusy(true);
     setCommentsEnabled(enabled);
+    // The background poll (every 3s) also writes `commentsEnabled` from the
+    // server's last-known value. Without this guard, a poll that was
+    // already in flight when you clicked -- or one that lands in the small
+    // window before this PATCH's write is visible to it -- would echo the
+    // *old* value straight back and the toggle would appear to "undo
+    // itself". Recording when we last changed it locally lets the poll
+    // handler (below) ignore the server value for a few seconds and trust
+    // this optimistic one instead, then resync automatically once that
+    // window passes.
+    lastCommentsToggleAtRef.current = Date.now();
     try {
-      await authedFetch(`/api/live/${liveId}/comments-enabled`, { enabled }, "PATCH");
+      const result = await authedFetch(`/api/live/${liveId}/comments-enabled`, { enabled }, "PATCH");
+      setCommentsEnabled(result.commentsEnabled);
     } catch {
       setCommentsEnabled(!enabled); // revert on failure
     } finally {
@@ -263,11 +298,11 @@ export default function LiveBroadcast() {
               {commentsEnabled ? "💬 On" : "🚫 Off"}
             </button>
           )}
-          {chatAvailable && (
+          {chatAvailable && !isDesktop && (
             <button
               onClick={() => setChatOpen((v) => !v)}
               title="Chat with the stranger"
-              className={`md:hidden font-mono text-[11px] px-2 py-1 border transition-colors ${
+              className={`font-mono text-[11px] px-2 py-1 border transition-colors ${
                 chatOpen ? "text-black bg-lime border-black" : "text-lime border-lime/40 hover:bg-lime/10"
               }`}
             >
@@ -390,9 +425,11 @@ export default function LiveBroadcast() {
 
         {/* Desktop chat side panel — permanently visible once matched,
             exactly mirroring MatchScreen's layout so the host can talk to
-            the stranger while the stream keeps running. */}
-        {chatAvailable && (
-          <div className="hidden md:flex md:flex-col md:w-80 md:h-full min-h-0 gap-2">
+            the stranger while the stream keeps running. Only rendered on
+            desktop (see isDesktop above) so it's never mounted alongside
+            the mobile drawer's own <ChatPanel> for the same match. */}
+        {chatAvailable && isDesktop && (
+          <div className="flex flex-col md:w-80 md:h-full min-h-0 gap-2">
             <p className="text-[11px] font-mono text-lime uppercase shrink-0">chat with stranger</p>
             <div className="flex-1 min-h-0">
               <ChatPanel key={matchId} matchId={matchId!} selfId={selfId!} />
@@ -402,8 +439,9 @@ export default function LiveBroadcast() {
       </main>
 
       {/* Mobile chat drawer — same ChatPanel, slid up from the bottom so it
-          never has to share screen space with the video while closed. */}
-      {chatAvailable && chatOpen && (
+          never has to share screen space with the video while closed.
+          Only rendered when NOT on desktop, for the same reason as above. */}
+      {chatAvailable && !isDesktop && chatOpen && (
         <div
           className="md:hidden fixed inset-0 z-50 bg-black/70 flex flex-col justify-end"
           onClick={() => setChatOpen(false)}
