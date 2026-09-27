@@ -232,8 +232,8 @@ export default function LiveViewer() {
           {commentsEnabled ? (
             <CommentsOverlay comments={comments} onSend={sendComment} />
           ) : (
-            <div className="absolute left-2 bottom-16 text-[10px] font-mono text-gray-400 bg-black/60 px-2 py-1">
-              comments are off
+            <div className="absolute left-2 bottom-16 text-[10px] font-mono text-gray-400 bg-black/60 px-2 py-1 flex items-center gap-1">
+              <span>🚫</span> comments are off
             </div>
           )}
 

@@ -67,7 +67,15 @@ export default function LiveFeed() {
 
       <main className="flex-1 overflow-y-auto p-4 sm:p-6">
         {loading && (
-          <p className="text-gray-500 text-sm font-mono">loading live streams...</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div
+                key={i}
+                className="aspect-[3/4] bg-black/40 border-2 border-black/60 animate-pulse"
+                style={{ animationDelay: `${i * 60}ms` }}
+              />
+            ))}
+          </div>
         )}
 
         {!loading && sessions.length === 0 && (
@@ -85,12 +93,14 @@ export default function LiveFeed() {
 
         {!loading && sessions.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
-            {sessions.map((s) => (
+            {sessions.map((s, i) => (
               <button
                 key={s.id}
                 onClick={() => navigate(`/live/${s.id}`)}
+                style={{ animationDelay: `${Math.min(i, 10) * 40}ms` }}
                 className="group relative aspect-[3/4] bg-black border-2 border-black shadow-brutal-sm overflow-hidden
-                  flex flex-col justify-end p-2.5 text-left hover:-translate-y-0.5 hover:border-magenta transition-all"
+                  flex flex-col justify-end p-2.5 text-left hover:-translate-y-0.5 hover:border-magenta
+                  active:translate-y-0 active:shadow-none transition-all animate-[cardIn_0.3s_ease-out_backwards]"
               >
                 <div
                   className="absolute top-2 left-2 flex items-center gap-1 bg-magenta text-black text-[10px]
@@ -127,11 +137,15 @@ export default function LiveFeed() {
       <button
         onClick={() => navigate("/live/go")}
         aria-label="Go live"
+        title="Go live"
         className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-lime text-black text-3xl font-bold
           border-2 border-black shadow-brutal flex items-center justify-center
-          active:translate-x-[3px] active:translate-y-[3px] active:shadow-brutal-sm hover:-translate-y-0.5 transition-transform"
+          active:translate-x-[3px] active:translate-y-[3px] active:shadow-brutal-sm hover:-translate-y-0.5 hover:shadow-[8px_8px_0_#000] transition-all"
       >
-        +
+        <span className="relative flex h-full w-full items-center justify-center">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-lime opacity-30" />
+          <span className="relative">+</span>
+        </span>
       </button>
     </div>
   );

@@ -348,13 +348,15 @@ export default function LiveBroadcast() {
             <button
               onClick={() => setHostCommentsVisible((v) => !v)}
               title={hostCommentsVisible ? "Hide comments from your own view" : "Show comments on your own view"}
-              className={`font-mono text-[11px] px-2 py-1 border transition-colors ${
+              aria-label={hostCommentsVisible ? "Hide comments from your own view" : "Show comments on your own view"}
+              className={`font-mono text-[11px] px-2 py-1 border transition-colors flex items-center gap-1 ${
                 hostCommentsVisible
                   ? "text-lime border-lime/40 hover:bg-lime/10"
                   : "text-gray-400 border-gray-600 hover:bg-white/5"
               }`}
             >
-              {hostCommentsVisible ? "👁 Shown" : "👁 Hidden"}
+              <span>👁</span>
+              <span className="hidden sm:inline">{hostCommentsVisible ? "Shown" : "Hidden"}</span>
             </button>
           )}
           {liveId && (
@@ -362,30 +364,34 @@ export default function LiveBroadcast() {
               onClick={toggleComments}
               disabled={commentsBusy}
               title={commentsEnabled ? "Viewers can comment — tap to turn off" : "Viewers can't comment — tap to turn on"}
-              className={`font-mono text-[11px] px-2 py-1 border transition-colors disabled:opacity-50 ${
+              aria-label={commentsEnabled ? "Turn off viewer comments" : "Turn on viewer comments"}
+              className={`font-mono text-[11px] px-2 py-1 border transition-colors disabled:opacity-50 flex items-center gap-1 ${
                 commentsEnabled
                   ? "text-cyan border-cyan/40 hover:bg-cyan/10"
                   : "text-gray-400 border-gray-600 hover:bg-white/5"
               }`}
             >
-              {commentsEnabled ? "💬 On" : "🚫 Off"}
+              <span>{commentsEnabled ? "💬" : "🚫"}</span>
+              <span className="hidden sm:inline">{commentsEnabled ? "On" : "Off"}</span>
             </button>
           )}
           {chatAvailable && !isDesktop && (
             <button
               onClick={() => setChatOpen((v) => !v)}
               title="Chat with the stranger"
-              className={`font-mono text-[11px] px-2 py-1 border transition-colors ${
+              aria-label="Chat with the stranger"
+              className={`font-mono text-[11px] px-2 py-1 border transition-colors flex items-center gap-1 ${
                 chatOpen ? "text-black bg-lime border-black" : "text-lime border-lime/40 hover:bg-lime/10"
               }`}
             >
-              💬 Chat
+              <span>💬</span>
+              <span className="hidden sm:inline">Chat</span>
             </button>
           )}
           {liveId && (
             <button
               onClick={handleEndLive}
-              className="font-mono text-[11px] text-black bg-red-400 hover:bg-red-300 px-2 py-1 border border-black uppercase font-bold"
+              className="font-mono text-[11px] text-black bg-red-400 hover:bg-red-300 active:translate-y-px px-2.5 py-1 border border-black uppercase font-bold transition-colors"
             >
               End
             </button>
@@ -496,7 +502,7 @@ export default function LiveBroadcast() {
 
             {liveId &&
               (hostCommentsVisible ? (
-                <CommentsOverlay comments={comments} onSend={() => {}} disabled />
+                <CommentsOverlay comments={comments} onSend={() => {}} disabled placeholder="view only" />
               ) : (
                 <div className="absolute left-2 bottom-3 text-[10px] font-mono text-gray-400 bg-black/60 px-2 py-1">
                   comments hidden from your view
