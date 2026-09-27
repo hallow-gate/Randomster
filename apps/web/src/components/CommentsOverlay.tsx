@@ -6,6 +6,11 @@ export interface LiveComment {
   username: string;
   text: string;
   created_at: string;
+  // Gapless, strictly-increasing per-session counter from live_comments.seq
+  // — the actual poll cursor (see LiveViewer/LiveBroadcast's
+  // lastCommentSeqRef). Absent on a comment's own optimistic, local echo,
+  // since that doesn't exist server-side yet.
+  seq?: number;
 }
 
 // A small, fixed palette so each username gets a stable, readable color

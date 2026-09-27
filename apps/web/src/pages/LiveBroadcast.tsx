@@ -128,7 +128,7 @@ export default function LiveBroadcast() {
   const [captionSaving, setCaptionSaving] = useState(false);
 
   const [chatOpen, setChatOpen] = useState(false);
-  const lastCommentAtRef = useRef<string | null>(null);
+  const lastCommentSeqRef = useRef<number | null>(null);
   const liveIdRef = useRef<string | null>(null);
   const startedMatchIdRef = useRef<string | null>(null);
   const endingRef = useRef(false);
@@ -200,7 +200,7 @@ export default function LiveBroadcast() {
     let cancelled = false;
     async function poll() {
       try {
-        const q = lastCommentAtRef.current ? `?after=${encodeURIComponent(lastCommentAtRef.current)}` : "";
+        const q = lastCommentSeqRef.current ? `?after=${lastCommentSeqRef.current}` : "";
         const data = await authedFetch(`/api/live/${liveId}/state${q}`, undefined, "GET");
         if (cancelled || data.ended) return;
         setViewerCount(data.viewerCount);
@@ -212,7 +212,7 @@ export default function LiveBroadcast() {
         }
         if (data.comments?.length) {
           setComments((prev) => [...prev, ...data.comments].slice(-100));
-          lastCommentAtRef.current = data.comments[data.comments.length - 1].created_at;
+          lastCommentSeqRef.current = data.comments[data.comments.length - 1].seq;
         }
       } catch {
         // transient — next poll retries

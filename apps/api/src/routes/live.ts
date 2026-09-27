@@ -332,7 +332,7 @@ liveRouter.post("/:id/join", liveActionLimiter, async (req: AuthedRequest, res) 
   );
 
   const comments = await neonQuery(
-    "select id, user_id, username, text, created_at from live_comments where session_id = $1 order by created_at desc limit 30",
+    "select id, user_id, username, text, created_at, seq from live_comments where session_id = $1 order by seq desc limit 30",
     [session.id]
   );
   const viewerCount = await getViewerCount(session.id);
@@ -386,18 +386,28 @@ liveRouter.get("/:id/state", liveActionLimiter, async (req: AuthedRequest, res) 
   // before any comments existed yet) has no `after` yet — there's nothing
   // to compare against. That used to make comments_enabled && after fail
   // and return an empty array *every single poll*, forever, because the
-  // client only ever sets its "last seen" timestamp from a non-empty
-  // comments response — which this endpoint would never give it. The host
-  // in particular never calls /join (only /start), so it had no other way
-  // to seed that timestamp: hosts silently never received a single
-  // comment, no matter how long the stream ran or how many came in.
-  // Defaulting a missing `after` to the epoch fixes this — first poll
-  // returns everything so far, every poll after that is a normal
-  // incremental fetch.
-  const after = typeof req.query.after === "string" ? req.query.after : "1970-01-01T00:00:00.000Z";
+  // client only ever sets its "last seen" cursor from a non-empty comments
+  // response — which this endpoint would never give it. The host in
+  // particular never calls /join (only /start), so it had no other way to
+  // seed that cursor: hosts silently never received a single comment, no
+  // matter how long the stream ran or how many came in. Defaulting a
+  // missing `after` to 0 fixes this — first poll returns everything so far
+  // (seq is always >= 1), every poll after that is a normal incremental
+  // fetch.
+  //
+  // `after` is a `seq` value (see live_comments.seq — a plain, gapless,
+  // strictly-increasing integer), not a `created_at` timestamp. A
+  // timestamp cursor round-tripped through JSON loses precision (Postgres
+  // stores microseconds, JS `Date`/`toISOString()` only keeps
+  // milliseconds), so the last comment's own truncated timestamp could
+  // still compare as "after" itself on the next poll — the exact bug that
+  // used to flood the feed with one comment appearing over and over.
+  // `seq` has no precision to lose and no possibility of a tie.
+  const afterSeq = Number(req.query.after);
+  const after = Number.isFinite(afterSeq) && afterSeq > 0 ? afterSeq : 0;
   const comments = session.comments_enabled
     ? await neonQuery(
-        "select id, user_id, username, text, created_at from live_comments where session_id = $1 and created_at > $2 order by created_at asc limit 50",
+        "select id, user_id, username, text, created_at, seq from live_comments where session_id = $1 and seq > $2 order by seq asc limit 50",
         [session.id, after]
       )
     : [];

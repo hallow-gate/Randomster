@@ -50,7 +50,7 @@ export default function LiveViewer() {
   const [reportOpen, setReportOpen] = useState(false);
   const [reported, setReported] = useState(false);
   const [commentBlocked, setCommentBlocked] = useState(false);
-  const lastCommentAtRef = useRef<string | null>(null);
+  const lastCommentSeqRef = useRef<number | null>(null);
 
   const active = !ended && (mode === "solo" || !!matchId);
   const { callState, remoteStreams } = useLiveViewerCalls(id ?? null, matchId, mode, active);
@@ -90,7 +90,7 @@ export default function LiveViewer() {
         setReactionCount(data.reactionCount);
         setComments(data.comments ?? []);
         setCommentsEnabled(data.commentsEnabled ?? true);
-        if (data.comments?.length) lastCommentAtRef.current = data.comments[data.comments.length - 1].created_at;
+        if (data.comments?.length) lastCommentSeqRef.current = data.comments[data.comments.length - 1].seq;
       })
       .catch(() => !cancelled && setJoinFailed(true));
 
@@ -106,7 +106,7 @@ export default function LiveViewer() {
     let cancelled = false;
     async function poll() {
       try {
-        const q = lastCommentAtRef.current ? `?after=${encodeURIComponent(lastCommentAtRef.current)}` : "";
+        const q = lastCommentSeqRef.current ? `?after=${lastCommentSeqRef.current}` : "";
         const data = await authedFetch(`/api/live/${id}/state${q}`, undefined, "GET");
         if (cancelled) return;
         if (data.ended) {
@@ -120,8 +120,19 @@ export default function LiveViewer() {
         setPartnerUsername(data.partnerUsername ?? null);
         setCaption(data.caption ?? null);
         if (data.comments?.length) {
-          setComments((prev) => [...prev, ...data.comments].slice(-100));
-          lastCommentAtRef.current = data.comments[data.comments.length - 1].created_at;
+          setComments((prev) => {
+            // Drop any local, not-yet-confirmed echo of a comment that has
+            // now come back for real (matched by user_id + text), so it
+            // doesn't sit there twice — once as "you", once under the
+            // sender's real username.
+            const incoming = data.comments as LiveComment[];
+            const confirmed = new Set(incoming.map((c) => `${c.user_id}:${c.text}`));
+            const withoutStaleEchoes = prev.filter(
+              (c) => !(c.id.startsWith("local-") && confirmed.has(`${c.user_id}:${c.text}`))
+            );
+            return [...withoutStaleEchoes, ...incoming].slice(-100);
+          });
+          lastCommentSeqRef.current = data.comments[data.comments.length - 1].seq;
         }
       } catch {
         // transient — next poll retries
@@ -153,9 +164,15 @@ export default function LiveViewer() {
       // other viewer never received it at all. That's what made "turn
       // comments off" look broken: it *was* blocking comments, just
       // invisibly, only for the one person still typing.
+      // Prefixed id marks this as a local, not-yet-confirmed echo so the
+      // next poll can swap it out instead of appending a second, duplicate
+      // copy once the real comment (with the same user_id + text) comes
+      // back from the server — every viewer, including the sender, gets
+      // their own comments back through the normal poll, same as anyone
+      // else's.
       setComments((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), user_id: session!.user.id, username: "you", text, created_at: new Date().toISOString() },
+        { id: `local-${crypto.randomUUID()}`, user_id: session!.user.id, username: "you", text, created_at: new Date().toISOString() },
       ]);
     } catch {
       setCommentBlocked(true);
