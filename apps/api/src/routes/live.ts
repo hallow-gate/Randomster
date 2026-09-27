@@ -47,6 +47,8 @@ interface LiveSessionRow {
   ended_at: string | null;
   last_heartbeat_at: string;
   comments_enabled: boolean;
+  mode: "random" | "solo";
+  caption: string | null;
 }
 
 const HEARTBEAT_STALE_SECONDS = 25;
@@ -99,17 +101,43 @@ async function getViewerCount(sessionId: string): Promise<number> {
 }
 
 // =========================================================
-// POST /api/live/start — broadcaster wraps an active match in a live
-// session. If the broadcaster already has one running (they hit "Next" and
-// matched with someone new), this RE-PARTNERS the existing session instead
-// of ending it — the live stream, its comments, reactions and viewers all
-// carry straight through to the new stranger, exactly like tapping "next"
-// on a normal TikTok-style live host view.
+// POST /api/live/start — go live, one of two ways:
+//   - mode "random" (default, original behavior): broadcaster wraps an
+//     active match in a live session. If they already have one running
+//     (they hit "Next" and matched with someone new), this RE-PARTNERS the
+//     existing session instead of ending it — comments/reactions/viewers
+//     all carry straight through to the new stranger.
+//   - mode "solo": just the host's own camera, no match involved at all.
+// Either way an optional caption can be set now, and changed later via
+// PATCH /:id/caption.
 // =========================================================
-const startSchema = z.object({ matchId: z.string().uuid() });
+const startSchema = z.object({
+  matchId: z.string().uuid().optional(),
+  mode: z.enum(["random", "solo"]).default("random"),
+  caption: z.string().trim().max(200).optional(),
+});
 liveRouter.post("/start", liveActionLimiter, validateBody(startSchema), async (req: AuthedRequest, res) => {
   const userId = req.userId!;
-  const { matchId } = req.body as z.infer<typeof startSchema>;
+  const { matchId, mode, caption } = req.body as z.infer<typeof startSchema>;
+
+  if (mode === "solo") {
+    const existingSolo = await neonQuery<LiveSessionRow>(
+      "select * from live_sessions where broadcaster_id = $1 and status = 'active'",
+      [userId]
+    );
+    if (existingSolo[0]) return res.json({ id: existingSolo[0].id, matchId: null, mode: "solo" });
+
+    const broadcasterUsername = await getUsername(userId);
+    const inserted = await neonQuery<{ id: string }>(
+      `insert into live_sessions (broadcaster_id, broadcaster_username, mode, caption)
+       values ($1, $2, 'solo', $3) returning id`,
+      [userId, broadcasterUsername, caption || null]
+    );
+    await supabaseAdmin.from("profiles").update({ is_live: true }).eq("id", userId);
+    return res.json({ id: inserted[0]?.id, matchId: null, mode: "solo" });
+  }
+
+  if (!matchId) return res.status(400).json({ error: "match_id_required" });
 
   const { data: match, error } = await supabaseAdmin
     .from("matches")
@@ -139,22 +167,43 @@ liveRouter.post("/start", liveActionLimiter, validateBody(startSchema), async (r
         [matchId, partnerId, partnerUsername, session.id]
       );
     }
-    return res.json({ id: session.id, matchId });
+    return res.json({ id: session.id, matchId, mode: "random" });
   }
 
   const broadcasterUsername = await getUsername(userId);
   const partnerUsername = await getUsername(partnerId);
 
   const inserted = await neonQuery<{ id: string }>(
-    `insert into live_sessions (match_id, broadcaster_id, broadcaster_username, partner_id, partner_username)
-     values ($1, $2, $3, $4, $5) returning id`,
-    [matchId, userId, broadcasterUsername, partnerId, partnerUsername]
+    `insert into live_sessions (match_id, broadcaster_id, broadcaster_username, partner_id, partner_username, mode, caption)
+     values ($1, $2, $3, $4, $5, 'random', $6) returning id`,
+    [matchId, userId, broadcasterUsername, partnerId, partnerUsername, caption || null]
   );
 
   await supabaseAdmin.from("profiles").update({ is_live: true }).eq("id", userId);
 
-  res.json({ id: inserted[0]?.id, matchId });
+  res.json({ id: inserted[0]?.id, matchId, mode: "random" });
 });
+
+// =========================================================
+// PATCH /api/live/:id/caption — host edits their caption while live
+// =========================================================
+const captionSchema = z.object({ caption: z.string().trim().max(200).nullable() });
+liveRouter.patch(
+  "/:id/caption",
+  liveActionLimiter,
+  validateBody(captionSchema),
+  async (req: AuthedRequest, res) => {
+    const userId = req.userId!;
+    const session = await getActiveSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "session_not_found" });
+    if (session.broadcaster_id !== userId) return res.status(403).json({ error: "not_broadcaster" });
+
+    const { caption } = req.body as z.infer<typeof captionSchema>;
+    const clean = caption?.trim() || null;
+    await neonQuery("update live_sessions set caption = $1 where id = $2", [clean, session.id]);
+    res.json({ caption: clean });
+  }
+);
 
 // =========================================================
 // POST /api/live/:id/clear-partner — host tapped "Next" (or the partner
@@ -238,6 +287,8 @@ liveRouter.get("/feed", liveActionLimiter, async (_req: AuthedRequest, res) => {
       partnerUsername: r.partner_username,
       viewerCount: Number(r.viewer_count),
       startedAt: r.started_at,
+      mode: r.mode,
+      caption: r.caption,
     })),
   });
 });
@@ -284,6 +335,8 @@ liveRouter.post("/:id/join", liveActionLimiter, async (req: AuthedRequest, res) 
     partnerUsername: session.partner_username,
     reactionCount: session.reaction_count,
     commentsEnabled: session.comments_enabled,
+    mode: session.mode,
+    caption: session.caption,
     viewerCount,
     comments: session.comments_enabled ? comments.reverse() : [],
   });
@@ -334,6 +387,8 @@ liveRouter.get("/:id/state", liveActionLimiter, async (req: AuthedRequest, res) 
     partnerUsername: session.partner_username,
     reactionCount: session.reaction_count,
     commentsEnabled: session.comments_enabled,
+    mode: session.mode,
+    caption: session.caption,
     viewerCount,
     comments,
   });
@@ -495,6 +550,41 @@ liveRouter.post("/:id/calls/session/new", liveActionLimiter, async (req: AuthedR
     respondToCallsError(res, err);
   }
 });
+
+// =========================================================
+// POST /api/live/:id/calls/tracks/push — HOST publishes local tracks for
+// solo mode (no match, so routes/calls.ts's match-scoped push doesn't
+// apply). Scoped to the session's broadcaster only -- unlike the pull/
+// renegotiate endpoints below, which any viewer can call, this one lets
+// you inject media into the stream, so it's restricted the same way
+// /comments-enabled and /end are.
+// =========================================================
+const hostPushSchema = z.object({
+  sessionId: z.string().min(1),
+  tracks: z.array(z.object({ location: z.literal("local"), trackName: z.string(), mid: z.string().optional() })),
+  sessionDescription: z.object({ type: z.literal("offer"), sdp: z.string() }),
+});
+liveRouter.post(
+  "/:id/calls/tracks/push",
+  liveActionLimiter,
+  validateBody(hostPushSchema),
+  async (req: AuthedRequest, res) => {
+    const userId = req.userId!;
+    const session = await getActiveSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "session_not_found" });
+    if (session.broadcaster_id !== userId) return res.status(403).json({ error: "not_broadcaster" });
+
+    const { sessionId, tracks, sessionDescription } = req.body as z.infer<typeof hostPushSchema>;
+    try {
+      const data = await withSessionLock(sessionId, () =>
+        cfFetch(`/sessions/${sessionId}/tracks/new`, { tracks, sessionDescription })
+      );
+      res.json(data);
+    } catch (err) {
+      respondToCallsError(res, err);
+    }
+  }
+);
 
 const pullSchema = z.object({
   sessionId: z.string().min(1),
