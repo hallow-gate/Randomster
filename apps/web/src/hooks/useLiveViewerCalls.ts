@@ -13,21 +13,30 @@ interface SignalPayload {
 }
 
 /**
- * Read-only counterpart to useCloudflareCalls: a live viewer is not a match
- * participant, so it never pushes local tracks — it only listens on the
- * same `match:{matchId}` Supabase Broadcast signaling channel the two real
- * participants already use, and pulls whatever they each announce via
- * apps/api/src/routes/live.ts's viewer-scoped `/calls/*` proxy.
+ * Read-only counterpart to useCloudflareCalls/useSoloLiveBroadcast: a live
+ * viewer never pushes local tracks, only pulls whatever the broadcaster
+ * side announces. Which side that is depends on the stream's mode:
+ *   - "random": the same `match:{matchId}` Supabase Broadcast channel the
+ *     two real call participants use, so there can be up to two remote
+ *     streams (broadcaster + partner).
+ *   - "solo": the `live:{liveId}` channel used by useSoloLiveBroadcast,
+ *     with exactly one remote stream (just the host).
+ * Either way, tracks are pulled through apps/api/src/routes/live.ts's
+ * viewer-scoped `/calls/*` proxy.
  *
- * There are two remote peers here (broadcaster + partner) instead of one,
- * so pulls are done strictly one at a time, in arrival order — after each
+ * Pulls are done strictly one at a time, in arrival order — after each
  * pull's renegotiation settles, whatever transceivers are new on the
  * PeerConnection belong to that peer, which is how each announcement ends
  * up as its own entry in `remoteStreams` without needing to know which
  * peer is the broadcaster vs. the stranger (the UI doesn't need to know —
  * it just renders "the video container", same as a normal 1:1 call).
  */
-export function useLiveViewerCalls(liveId: string | null, matchId: string | null, active: boolean) {
+export function useLiveViewerCalls(
+  liveId: string | null,
+  matchId: string | null,
+  mode: "random" | "solo",
+  active: boolean
+) {
   const [callState, setCallState] = useState<CallState>("idle");
   const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -49,13 +58,15 @@ export function useLiveViewerCalls(liveId: string | null, matchId: string | null
   }).current;
 
   useEffect(() => {
-    if (!active || !liveId || !matchId) return;
+    if (!active || !liveId) return;
+    if (mode === "random" && !matchId) return; // random-mode viewers need a match to signal against; solo doesn't
     let cancelled = false;
     claimedTrackIdsRef.current = new Set();
     pulledKeysRef.current = new Set();
     pullChainRef.current = Promise.resolve();
 
-    const signalChannel = supabase.channel(`match:${matchId}`, {
+    const channelTopic = mode === "solo" ? `live:${liveId}` : `match:${matchId}`;
+    const signalChannel = supabase.channel(channelTopic, {
       config: { broadcast: { self: false, ack: true } },
     });
 
@@ -167,7 +178,7 @@ export function useLiveViewerCalls(liveId: string | null, matchId: string | null
       setRemoteStreams([]);
       setCallState("ended");
     };
-  }, [active, liveId, matchId, authedFetch]);
+  }, [active, liveId, matchId, mode, authedFetch]);
 
   return { callState, remoteStreams };
 }
