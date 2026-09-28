@@ -5,6 +5,7 @@ import { useMatchmaking } from "../hooks/useMatchmaking";
 import { useLocalMedia } from "../hooks/useLocalMedia";
 import { useCloudflareCalls } from "../hooks/useCloudflareCalls";
 import { useSoloLiveBroadcast } from "../hooks/useSoloLiveBroadcast";
+import { useAutoplay } from "../hooks/useAutoplay";
 import { useSoundEffects } from "../hooks/useSoundEffects";
 import { BrutalButton } from "../components/BrutalButton";
 import { TerminalLoader } from "../components/TerminalLoader";
@@ -143,6 +144,12 @@ export default function LiveBroadcast() {
   useEffect(() => {
     if (mainVideoRef.current) mainVideoRef.current.srcObject = remoteStream ?? localStream ?? null;
   }, [remoteStream, localStream]);
+
+  // See useAutoplay's own comment -- fallback in case the main box's
+  // stream ever fails to autoplay. Harmless to run even while showing the
+  // host's own (muted) camera; `blocked` will simply never trigger for
+  // muted content.
+  const { blocked: mainBlocked, retry: retryMainPlay } = useAutoplay(mainVideoRef, remoteStream ?? localStream);
 
   // PIP: always the host's own camera. Visibility (not mount state) is
   // toggled by CSS depending on whether the main box is currently showing
@@ -328,7 +335,7 @@ export default function LiveBroadcast() {
   const chatAvailable = mode === "random" && matchState === "matched" && !!matchId && !!selfId;
 
   return (
-    <div className="h-dvh flex flex-col overflow-hidden bg-charcoal text-white">
+    <div className="h-dvh flex flex-col overflow-hidden bg-charcoal text-white safe-area-y">
       {/* ---------------------------------------------------------------- */}
       {/* Header: identity/status on the left, all host controls grouped  */}
       {/* on the right as compact icon-pills instead of scattered text     */}
@@ -455,6 +462,14 @@ export default function LiveBroadcast() {
               <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm font-mono">
                 starting camera...
               </div>
+            )}
+            {mainBlocked && (
+              <button
+                onClick={retryMainPlay}
+                className="absolute inset-0 flex items-center justify-center text-white text-sm font-mono bg-black/70"
+              >
+                ▶ tap to start video
+              </button>
             )}
             {mode === "solo" && liveId && callState === "connecting" && (
               <div className="absolute inset-x-0 bottom-0 bg-black/70 text-cyan text-xs font-mono text-center py-1">

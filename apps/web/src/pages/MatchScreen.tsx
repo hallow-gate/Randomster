@@ -5,6 +5,7 @@ import { useMatchmaking } from "../hooks/useMatchmaking";
 import { useLocalMedia } from "../hooks/useLocalMedia";
 import { useCloudflareCalls } from "../hooks/useCloudflareCalls";
 import { useSoundEffects } from "../hooks/useSoundEffects";
+import { useAutoplay } from "../hooks/useAutoplay";
 import { BrutalButton } from "../components/BrutalButton";
 import { FlagBadge } from "../components/FlagBadge";
 import { TerminalLoader } from "../components/TerminalLoader";
@@ -36,6 +37,12 @@ export default function MatchScreen() {
   useEffect(() => {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
   }, [remoteStream]);
+
+  // See useAutoplay's own comment -- this is a fallback in case the
+  // stranger's audio+video ever fails to autoplay (their video carries
+  // real sound, unlike the muted self-preview below, so it's the one that
+  // actually needs this).
+  const { blocked: remoteBlocked, retry: retryRemotePlay } = useAutoplay(remoteVideoRef, remoteStream);
 
   useEffect(() => {
     const video = remoteVideoRef.current;
@@ -93,7 +100,7 @@ export default function MatchScreen() {
     // consistently a bit taller than the visible screen. Paired with
     // `overflow-hidden` here, the whole call UI is now sized to actually fit
     // the screen -- nothing to scroll past to reach the chat or controls.
-    <div className="h-dvh flex flex-col overflow-hidden">
+    <div className="h-dvh flex flex-col overflow-hidden safe-area-y">
       <header className="shrink-0 flex items-center justify-between px-4 py-3 border-b-2 border-black">
         <h1 className="font-display font-bold text-lime">RANDOMSTER</h1>
         <div className="flex items-center gap-3">
@@ -157,6 +164,14 @@ export default function MatchScreen() {
               <div className="absolute inset-0 flex items-center justify-center text-magenta text-sm font-mono bg-black/60">
                 connection failed — try skip
               </div>
+            )}
+            {remoteBlocked && (
+              <button
+                onClick={retryRemotePlay}
+                className="absolute inset-0 flex items-center justify-center text-white text-sm font-mono bg-black/70"
+              >
+                ▶ tap to start video
+              </button>
             )}
 
             {localStream && (

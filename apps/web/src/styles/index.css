@@ -11,6 +11,23 @@ body {
   background-color: #0e0e10;
 }
 
+/* For the full-bleed call/live-stream screens (MatchScreen, LiveViewer,
+   LiveBroadcast): their outermost `h-dvh` container sizes to exactly the
+   visible viewport, but `dvh` only accounts for the browser's own chrome
+   (address bar etc), not a device's notch/Dynamic Island or home-indicator
+   safe areas. Without this, the topmost/bottommost UI in that container
+   (status bar, ControlDock) sits flush against those on a notched iPhone.
+   Tailwind's base reset sets `box-sizing: border-box` globally, so this
+   padding is carved out of the fixed `dvh` height rather than added on
+   top of it -- it can't reintroduce the overflow-past-the-viewport bug
+   `h-dvh` itself was adopted to fix. Needs `viewport-fit=cover` in
+   index.html's viewport meta, or these `env()` values resolve to 0 on
+   every device, notched or not. */
+.safe-area-y {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 /* Grain/noise overlay */
 .grain-overlay {
   pointer-events: none;

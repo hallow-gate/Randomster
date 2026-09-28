@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuthContext } from "../hooks/AuthProvider";
 import { useLiveViewerCalls } from "../hooks/useLiveViewerCalls";
+import { useAutoplay } from "../hooks/useAutoplay";
 import { CommentsOverlay, type LiveComment } from "../components/CommentsOverlay";
 import { HeartReaction } from "../components/HeartReaction";
 import { BrutalButton } from "../components/BrutalButton";
@@ -73,6 +74,12 @@ export default function LiveViewer() {
   useEffect(() => {
     if (secondaryRef.current) secondaryRef.current.srcObject = remoteStreams[1] ?? null;
   }, [remoteStreams]);
+
+  // See useAutoplay's own comment -- fallback in case either stream ever
+  // fails to autoplay. Both carry real sound here (there's no muted
+  // self-preview on this page — a viewer never sees their own camera).
+  const { blocked: primaryBlocked, retry: retryPrimaryPlay } = useAutoplay(primaryRef, remoteStreams[0]);
+  const { blocked: secondaryBlocked, retry: retrySecondaryPlay } = useAutoplay(secondaryRef, remoteStreams[1]);
 
   // Join on mount, leave on unmount.
   useEffect(() => {
@@ -206,7 +213,7 @@ export default function LiveViewer() {
 
   if (joinFailed || ended) {
     return (
-      <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-charcoal">
+      <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-charcoal safe-area-y">
         <p className="text-gray-400 font-mono text-sm">
           {ended ? "This stream just ended." : "This stream isn't live anymore."}
         </p>
@@ -216,7 +223,7 @@ export default function LiveViewer() {
   }
 
   return (
-    <div className="h-dvh flex flex-col overflow-hidden bg-charcoal text-white">
+    <div className="h-dvh flex flex-col overflow-hidden bg-charcoal text-white safe-area-y">
       <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-3 border-b-2 border-black bg-black/40">
         <button
           onClick={() => navigate("/live")}
@@ -259,6 +266,14 @@ export default function LiveViewer() {
               connecting to stream...
             </div>
           )}
+          {primaryBlocked && (
+            <button
+              onClick={retryPrimaryPlay}
+              className="absolute inset-0 flex items-center justify-center text-white text-sm font-mono bg-black/70"
+            >
+              ▶ tap to start video
+            </button>
+          )}
           {mode === "random" && (
             <video
               ref={secondaryRef}
@@ -266,6 +281,14 @@ export default function LiveViewer() {
               playsInline
               className="absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 object-cover border-2 border-lime shadow-brutal-sm -scale-x-100"
             />
+          )}
+          {mode === "random" && secondaryBlocked && (
+            <button
+              onClick={retrySecondaryPlay}
+              className="absolute bottom-2 right-2 w-20 h-16 sm:w-28 sm:h-20 flex items-center justify-center text-[10px] text-white bg-black/70 border-2 border-lime"
+            >
+              ▶ tap
+            </button>
           )}
 
           <div className="absolute top-2 left-2 flex items-center gap-1 bg-magenta text-black text-[10px] font-display font-bold uppercase px-1.5 py-0.5 border border-black">
